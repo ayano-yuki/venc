@@ -1,0 +1,23 @@
+[package]
+name = "venc-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "venc"
+path = "src/main.rs"
+
+[dependencies]
+venc-vault = { path = "../venc-vault" }
+anyhow.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+
+serde.workspace = true
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"

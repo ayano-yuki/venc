@@ -1,0 +1,14 @@
+[package]
+name = "venc-vault"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+venc-crypto = { path = "../venc-crypto" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+fs2 = "0.4"
+tempfile = "3"
