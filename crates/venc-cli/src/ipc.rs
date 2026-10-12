@@ -45,6 +45,7 @@ fn flag(params: &Value, key: &str) -> Result<bool> {
 fn dispatch(request: &Request, session: &mut Option<Session>) -> Result<Value> {
     let p = &request.params;
     match request.method.as_str() {
+        "hello" => return Ok(json!({"protocol":1,"capabilities":["changePasswords"]})),
         "init" | "unlock" => {
             ensure!(session.is_none(), "session is already open");
             let path = Path::new(text(p, "vault")?);
@@ -55,7 +56,7 @@ fn dispatch(request: &Request, session: &mut Option<Session>) -> Result<Value> {
             } else {
                 Session::unlock(path, a, b)?
             };
-            let result = json!({ "vaultId": opened.vault_id(), "protocol": 1 });
+            let result = json!({ "vaultId": opened.vault_id(), "protocol": 1, "capabilities": ["changePasswords"] });
             *session = Some(opened);
             return Ok(result);
         }
@@ -67,6 +68,15 @@ fn dispatch(request: &Request, session: &mut Option<Session>) -> Result<Value> {
     }
     let s = session.as_mut().ok_or(FsError::Unavailable)?;
     Ok(match request.method.as_str() {
+        "changePasswords" => {
+            s.change_passwords(
+                text(p, "oldA")?.as_bytes(),
+                text(p, "oldB")?.as_bytes(),
+                text(p, "newA")?.as_bytes(),
+                text(p, "newB")?.as_bytes(),
+            )?;
+            Value::Null
+        }
         "stat" => serde_json::to_value(s.stat(text(p, "path")?)?)?,
         "readDirectory" => serde_json::to_value(s.read_directory(text(p, "path")?)?)?,
         "readFile" => {
@@ -148,7 +158,7 @@ pub fn serve(mut input: impl BufRead, mut output: impl Write) -> Result<()> {
             Err(_) => anyhow::bail!("invalid IPC frame"),
         };
         let result = dispatch(&request, &mut session);
-        let locked = session.as_ref().is_none_or(|s| s.list().is_err());
+        let locked = session.as_ref().is_none_or(Session::is_locked);
         if locked {
             session = None;
         }
@@ -209,5 +219,30 @@ mod tests {
         assert!(result.is_err());
         assert!(!result.unwrap_err().to_string().contains("secret"));
         assert!(out.is_empty());
+    }
+    #[test]
+    fn ipc_password_change_reauthenticates_and_keeps_objects() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let vault = temp.path().join("vault");
+        let mut session = Some(Session::init(&vault, b"a", b"b")?);
+        session
+            .as_mut()
+            .unwrap()
+            .write_file("file", b"secret", true, false)?;
+        let before = std::fs::read(vault.join("metadata.enc"))?;
+        let request = |old_a: &str| Request {
+            id: 1,
+            method: "changePasswords".into(),
+            params: json!({"oldA":old_a,"oldB":"b","newA":"new-a","newB":"new-b"}),
+        };
+        assert!(dispatch(&request("wrong"), &mut session).is_err());
+        dispatch(&request("a"), &mut session)?;
+        assert_eq!(std::fs::read(vault.join("metadata.enc"))?, before);
+        session = None;
+        assert!(session.is_none());
+        assert!(Session::unlock(&vault, b"a", b"b").is_err());
+        let opened = Session::unlock(&vault, b"new-a", b"new-b")?;
+        assert_eq!(&*opened.read_file("file")?, b"secret");
+        Ok(())
     }
 }

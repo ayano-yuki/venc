@@ -192,6 +192,10 @@ impl Session {
             header.format == "venc" && header.version == 1 && valid_id(&header.vault_id),
             "unsupported vault format"
         );
+        ensure!(
+            header.vmk_wrap.ciphertext.len() == 48,
+            "invalid wrapped master key"
+        );
         let kek = header.kdf.derive(password_a, password_b)?;
         let master = open_key(
             &kek,
@@ -201,31 +205,33 @@ impl Session {
         let meta_key = expand(&master[..], header.vault_id.as_bytes(), b"venc/v1/metadata")?;
         let sealed: Sealed =
             serde_json::from_slice(&read_bounded(&root.join("metadata.enc"), MAX_JSON)?)?;
+        ensure!(
+            sealed.ciphertext.len() <= MAX_METADATA + 16,
+            "metadata exceeds size limit"
+        );
         let plain = open(&meta_key, &sealed, &aad(&header.vault_id, "metadata", ""))?;
         ensure!(plain.len() <= MAX_METADATA, "metadata exceeds size limit");
         let metadata: Metadata = serde_json::from_slice(&plain)?;
-        for path in metadata.directories.keys() {
+        for path in metadata.files.keys().chain(metadata.directories.keys()) {
             valid_path(path)?;
             ensure!(
-                !metadata.files.contains_key(path),
+                !(metadata.files.contains_key(path) && metadata.directories.contains_key(path)),
                 "file/directory conflict"
             );
+            let mut ancestor = path.as_str();
+            while let Some((parent, _)) = ancestor.rsplit_once('/') {
+                ensure!(
+                    !metadata.files.contains_key(parent),
+                    "file/directory conflict"
+                );
+                ancestor = parent;
+            }
         }
-        for (path, entry) in &metadata.files {
-            valid_path(path)?;
+        for entry in metadata.files.values() {
             ensure!(
-                !metadata
-                    .files
-                    .keys()
-                    .any(|p| path.starts_with(&format!("{p}/")))
-                    && !metadata
-                        .directories
-                        .keys()
-                        .any(|p| p.starts_with(&format!("{path}/"))),
-                "file/directory conflict"
-            );
-            ensure!(
-                valid_id(&entry.object) && entry.size <= MAX_FILE_SIZE,
+                valid_id(&entry.object)
+                    && entry.size <= MAX_FILE_SIZE
+                    && entry.wrapped_key.ciphertext.len() == 48,
                 "invalid file metadata"
             );
         }
@@ -313,7 +319,13 @@ impl Session {
                     .files
                     .get(path)
                     .map_or_else(filesystem::now, |entry| entry.ctime),
-                mtime: filesystem::now(),
+                mtime: self
+                    .metadata
+                    .files
+                    .get(path)
+                    .map_or_else(filesystem::now, |entry| {
+                        filesystem::now().max(entry.mtime.saturating_add(1))
+                    }),
             },
         );
         self.commit(metadata)
@@ -333,6 +345,14 @@ impl Session {
                 .join(format!("{}.enc", entry.object)),
             MAX_JSON,
         )?)?;
+        ensure!(
+            sealed.ciphertext.len() == entry.size + 16,
+            "invalid encrypted file length"
+        );
+        ensure!(
+            entry.wrapped_key.ciphertext.len() == 48,
+            "invalid wrapped file key"
+        );
         let fek = open_key(
             &self.wrap_key()?,
             &entry.wrapped_key,
@@ -401,6 +421,9 @@ impl Session {
         }
         self.header = header;
         Ok(())
+    }
+    pub fn is_locked(&self) -> bool {
+        self.master.is_none()
     }
     pub fn vault_id(&self) -> &str {
         &self.header.vault_id

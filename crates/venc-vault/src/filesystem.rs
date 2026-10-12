@@ -118,6 +118,9 @@ impl Session {
     }
     pub fn create_directory(&mut self, path: &str) -> Result<()> {
         self.fs_ready(path)?;
+        if self.is_directory(path) {
+            return Ok(());
+        }
         let mut metadata = self.metadata.clone();
         let mut current = String::new();
         for component in path.split('/').filter(|s| !s.is_empty()) {
@@ -126,7 +129,12 @@ impl Session {
             }
             current.push_str(component);
             if metadata.files.contains_key(&current) {
-                return Err(FsError::NotDirectory.into());
+                return Err(if current == path {
+                    FsError::Exists
+                } else {
+                    FsError::NotDirectory
+                }
+                .into());
             }
             metadata
                 .directories
@@ -279,7 +287,15 @@ mod tests {
             code(s.write_file("dir/nested/a.txt", b"wrong", true, false)),
             FsError::Exists
         );
+        let before = s.stat("dir/nested/a.txt")?;
         s.write_file("dir/nested/a.txt", b"second", false, true)?;
+        let after = s.stat("dir/nested/a.txt")?;
+        assert!(after.mtime > before.mtime);
+        assert_eq!(after.ctime, before.ctime);
+        assert_eq!(
+            code(s.create_directory("dir/nested/a.txt")),
+            FsError::Exists
+        );
         assert_eq!(
             code(s.write_file("dir", b"a", true, true)),
             FsError::IsDirectory

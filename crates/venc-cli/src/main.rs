@@ -138,7 +138,7 @@ fn run() -> Result<()> {
                     Ok(true) => (),
                     Err(err) => eprintln!("Error: {err}"),
                 }
-                if session.list().is_err() {
+                if session.is_locked() {
                     break;
                 }
             }
