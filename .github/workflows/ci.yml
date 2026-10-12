@@ -1,0 +1,58 @@
+name: Verify
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --locked
+      - run: npm ci --ignore-scripts
+        working-directory: vscode-extension
+      - run: npm test
+        working-directory: vscode-extension
+      - run: npm run package
+        working-directory: vscode-extension
+  editor:
+    strategy:
+      fail-fast: false
+      matrix:
+        vscode: ['1.95.3', stable]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y libnss3 libasound2t64 libxkbfile1 xvfb
+      - run: cargo build --locked
+      - run: npm ci --ignore-scripts
+        working-directory: vscode-extension
+      - run: xvfb-run -a npm run test:integration
+        working-directory: vscode-extension
+        env:
+          VENC_TEST_VSCODE_VERSION: ${{ matrix.vscode }}
+      - run: xvfb-run -a npm run test:backups
+        if: matrix.vscode == '1.95.3'
+        working-directory: vscode-extension

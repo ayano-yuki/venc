@@ -23,7 +23,7 @@ exports.activate = async () => {
     const child = spawn(binary, ['--no-sandbox', '--disable-gpu', '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes',
         '--user-data-dir', path.join(temp, 'user'), '--extensions-dir', path.join(temp, 'extensions')], {
         env: { ...process.env, VENC_TEST_USER_DATA: path.join(temp, 'user'), VENC_PROBE_BACKUPS: '1',
-            VENC_TEST_CORE: process.env.VENC_TEST_CORE || path.resolve(__dirname, '../../target/debug/venc') }, stdio: ['ignore', 'pipe', 'pipe']
+            VENC_TEST_CORE: process.env.VENC_TEST_CORE || path.resolve(__dirname, '../../target/debug', process.platform === 'win32' ? 'venc.exe' : 'venc') }, stdio: ['ignore', 'pipe', 'pipe']
     });
     let diagnostics = '';
     child.stdout.on('data', data => { diagnostics += data; });
