@@ -10,7 +10,7 @@ exports.run = async () => {
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-electron-'));
     const vault = path.join(temp, 'vault');
     const client = new CoreClient(process.env.VENC_TEST_CORE);
-    const provider = new VaultProvider();
+    const provider = new VaultProvider("venc-test");
     let registration;
     try {
         await vscode.workspace.getConfiguration('files').update('hotExit', 'off', vscode.ConfigurationTarget.Global);
@@ -18,7 +18,7 @@ exports.run = async () => {
         const opened = await client.request('init', { vault, passwordA: 'alpha', passwordB: 'beta' });
         const root = provider.mount(opened.vaultId, client);
         // Exercise real VS Code filesystem dispatch, document editing, and save.
-        registration = vscode.workspace.registerFileSystemProvider('venc', provider, { isCaseSensitive: true });
+        registration = vscode.workspace.registerFileSystemProvider('venc-test', provider, { isCaseSensitive: true });
         const dir = vscode.Uri.joinPath(root, 'notes');
         const file = vscode.Uri.joinPath(dir, '日本語.txt');
         await vscode.workspace.fs.createDirectory(dir);
@@ -64,6 +64,20 @@ exports.run = async () => {
             assert.deepEqual(await vscode.workspace.fs.readDirectory(root), []);
         } finally { reopened.dispose(); }
         console.log('VS Code editor integration: virtual FS create/read/edit/save/rename/lock/reopen/delete passed');
+        if (process.env.VENC_PROBE_BACKUPS !== '1') {
+            registration.dispose(); registration = undefined;
+            provider.dispose();
+            const extension = vscode.extensions.getExtension('ayano-yuki.venc');
+            assert(extension, 'Development extension is discoverable');
+            await extension.activate();
+            const commands = await vscode.commands.getCommands(true);
+            for (const name of ['venc.openVault', 'venc.openAnotherVault', 'venc.lockAllVaults', 'venc.changePasswords', 'venc.forgetVault']) {
+                assert(commands.includes(name), `${name} registered by the actual extension`);
+            }
+            await vscode.commands.executeCommand('venc.lockAllVaults');
+            console.log('Actual extension activation, status bar, and command registration passed');
+        }
+
     } finally {
         registration?.dispose(); provider.dispose(); client.dispose();
         await fs.rm(temp, { recursive: true, force: true });

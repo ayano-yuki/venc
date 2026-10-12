@@ -8,6 +8,7 @@ const Module = require('node:module');
 class Uri {
     constructor({ scheme, authority, path: uriPath, query = '', fragment = '' }) { Object.assign(this, { scheme, authority, path: uriPath, query, fragment }); }
     static from(parts) { return new Uri(parts); }
+    static file(location) { return new Uri({ scheme: "file", authority: "", path: location }); }
     with(parts) { return new Uri({ ...this, ...parts }); }
     toString() { return `${this.scheme}://${this.authority}${this.path}`; }
 }
@@ -30,7 +31,7 @@ Module._load = function (id, ...args) { return id === 'vscode' ? mock : load.cal
 const { VaultProvider } = require('../dist/vaultProvider');
 Module._load = load;
 const { CoreClient } = require('../dist/coreClient');
-const binary = process.env.VENC_TEST_CORE || path.resolve(__dirname, '../../target/debug/venc');
+const binary = process.env.VENC_TEST_CORE || path.resolve(__dirname, '../../target/debug', process.platform === 'win32' ? 'venc.exe' : 'venc');
 
 test('provider with real Rust child: directories, binary data, options, events, rename, reopen, lock', async t => {
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-provider-'));
@@ -38,6 +39,9 @@ test('provider with real Rust child: directories, binary data, options, events, 
     const client = new CoreClient(binary);
     const provider = new VaultProvider();
     t.after(async () => { client.dispose(); provider.dispose(); await fs.rm(temp, { recursive: true, force: true }); });
+    const hello = await client.request('hello', {});
+    assert.equal(hello.protocol, 1);
+    assert.equal(client.closed, false);
     const result = await client.request('init', { vault, passwordA: 'alpha', passwordB: 'beta' });
     const root = provider.mount(result.vaultId, client);
     const uri = name => root.with({ path: '/' + name });
@@ -57,6 +61,9 @@ test('provider with real Rust child: directories, binary data, options, events, 
     await assert.rejects(provider.readFile(uri('../escape')), { code: 'NoPermissions' });
     await assert.rejects(provider.rename(uri('dir'), uri('dir/child'), { overwrite: false }), { code: 'NoPermissions' });
     await assert.rejects(provider.rename(uri('dir'), uri('other').with({ authority: 'other-vault' }), { overwrite: false }), { code: 'NoPermissions' });
+    const eventCount = events.length;
+    await provider.rename(uri('dir'), uri('dir'), { overwrite: false });
+    assert.equal(events.length, eventCount);
     const before = await fs.readdir(path.join(vault, 'objects'));
     await provider.rename(uri('dir'), uri('moved'), { overwrite: false });
     assert.deepEqual(await fs.readdir(path.join(vault, 'objects')), before);
@@ -100,31 +107,40 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     let saveAllowed = false;
     let choice = 'Save and Lock';
     const inputs = ['vault', 'alpha', 'beta', 'alpha', 'beta'];
+    const notices = [];
+    let configurationChanged;
+    let historyEnabled = false;
+    let configuredBinary = binary;
+    let folderChanged;
+    const status = { show() {}, dispose() {} };
     const folders = [{ uri: Uri.from({ scheme: 'file', authority: '', path: temp }), name: 'test', index: 0 }];
     const documents = [];
     class TabInputText { constructor(uri) { this.uri = uri; } }
     Object.assign(mock, {
-        ConfigurationTarget: { Global: 1 }, ProgressLocation: { Notification: 1 },
+        ConfigurationTarget: { Global: 1 }, ProgressLocation: { Notification: 1 }, StatusBarAlignment: { Left: 1 },
         TabInputText, TabInputNotebook: class {}, TabInputCustom: class {}, TabInputTextDiff: class {}, TabInputNotebookDiff: class {},
         workspace: {
             isTrusted: true, workspaceFolders: folders, textDocuments: documents, notebookDocuments: [],
             getConfiguration(section) { return { get(key, fallback) {
                 if (section === 'files' && key === 'hotExit') return 'off';
-                if (section === 'workbench.localHistory' && key === 'enabled') return false;
-                if (section === 'venc' && key === 'corePath') return binary;
+                if (section === 'workbench.localHistory' && key === 'enabled') return historyEnabled;
+                if (section === 'venc' && key === 'corePath') return configuredBinary;
                 return fallback;
             } }; },
             registerFileSystemProvider(_scheme, value) { registered = value; return new Disposable(() => {}); },
             updateWorkspaceFolders(_start, _deleteCount, folder) { folders.push({ ...folder, index: folders.length }); return true; },
-            onDidChangeConfiguration() { return new Disposable(() => {}); }
+            onDidChangeConfiguration(callback) { configurationChanged = callback; return new Disposable(() => {}); },
+            onDidChangeWorkspaceFolders(callback) { folderChanged = callback; return new Disposable(() => {}); }
         },
         window: {
             showInputBox: async () => inputs.shift(),
-            showOpenDialog: async () => [{ fsPath: temp }],
+            showOpenDialog: async () => [{ fsPath: temp, scheme: 'file' }],
+            createStatusBarItem: () => status,
+            showInformationMessage: async message => { notices.push(message); },
             showWarningMessage: async message => message.startsWith('The standard') ? 'Continue' : choice,
             showErrorMessage: async message => { errors.push(message); },
             withProgress: async (_options, fn) => fn(),
-            tabGroups: { all: [{ tabs: [] }], close: async () => closeAllowed },
+            tabGroups: { all: [{ tabs: [] }], close: async () => { if (closeAllowed) mock.window.tabGroups.all[0].tabs = []; return closeAllowed; } },
         },
         commands: {
             registerCommand(name, fn) { handlers.set(name, fn); return new Disposable(() => {}); },
@@ -150,6 +166,9 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
         document.isDirty = false; return true;
     } };
     documents.push(document);
+    let notebookSaves = 0;
+    mock.workspace.notebookDocuments.push({ uri: root.with({ path: "/notebook.ipynb" }), isDirty: true,
+        save: async function () { notebookSaves++; if (saveAllowed) { this.isDirty = false; return true; } return false; } });
     mock.window.tabGroups.all[0].tabs = [{ input: new TabInputText(file), isDirty: false }];
     choice = undefined;
     await handlers.get('venc.lockVault')();
@@ -161,11 +180,59 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     saveAllowed = true; closeAllowed = false;
     await handlers.get('venc.lockVault')();
     assert.equal(Buffer.from(await registered.readFile(file)).toString(), 'saved');
+    assert.equal(notebookSaves, 1);
     closeAllowed = true;
     await handlers.get('venc.lockVault')();
     await assert.rejects(registered.stat(file), { code: 'Unavailable' });
     assert(!JSON.stringify(state).includes('alpha'));
     assert(!JSON.stringify(state).includes('beta'));
+    assert(status.text.includes('0 open'));
+    inputs.push('alpha', 'beta');
+    await handlers.get('venc.openVault')();
+    assert.equal((await registered.stat(file)).size, 5);
+    assert(status.text.includes('1 open'));
+    // Confirmation cancellation releases references and leaves credentials unchanged.
+    inputs.push('alpha', 'beta', 'new-a', 'new-b', undefined);
+    await handlers.get('venc.changePasswords')();
+    assert.equal((await registered.stat(file)).size, 5);
+    inputs.push('alpha', 'beta', 'new-a', 'new-b', 'new-a', 'new-b');
+    await handlers.get('venc.changePasswords')();
+    assert(notices.some(message => message.includes('passwords changed')));
+    await handlers.get('venc.lockAllVaults')();
+    await assert.rejects(registered.stat(file), { code: 'Unavailable' });
+    inputs.push('alpha', 'beta');
+    await handlers.get('venc.openVault')();
+    await assert.rejects(registered.stat(file), { code: 'Unavailable' });
+    inputs.push('new-a', 'new-b');
+    await handlers.get('venc.openVault')();
+    assert.equal((await registered.stat(file)).size, 5);
+    configurationChanged({ affectsConfiguration: () => false });
+    assert.equal((await registered.stat(file)).size, 5);
+    historyEnabled = true;
+    configurationChanged({ affectsConfiguration: () => true });
+    await assert.rejects(registered.stat(file), { code: 'Unavailable' });
+    historyEnabled = false;
+    // Allow EOF to release the old core's OS lock after emergency disconnect.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    inputs.push('new-a', 'new-b');
+    await handlers.get('venc.openVault')();
+    assert.equal((await registered.stat(file)).size, 5);
+    folders.splice(1);
+    folderChanged();
+    await assert.rejects(registered.stat(file), { code: 'Unavailable' });
+    await handlers.get('venc.forgetVault')();
+    assert.deepEqual(state.vaultLocations, {});
+    if (process.platform !== 'win32') {
+        const incompatible = path.join(temp, 'old-core');
+        await fs.writeFile(incompatible, '#!/bin/sh\nread -r line\nprintf \'{"id":1,"result":{"protocol":99},"locked":true}\\n\'\n', { mode: 0o700 });
+        configuredBinary = incompatible;
+        inputs.push('sensitive-a', 'sensitive-b');
+        await handlers.get('venc.openAnotherVault')();
+        assert.deepEqual(inputs, ['sensitive-a', 'sensitive-b']);
+        assert(errors.some(message => message.includes('before entering passwords')));
+    }
+
+
 });
 
 test('timeout terminates core and rejects pending calls', { skip: process.platform === 'win32' }, async t => {
@@ -186,4 +253,51 @@ test('malformed response revokes connection', { skip: process.platform === 'win3
     t.after(async () => { client.dispose(); await fs.rm(temp, { recursive: true, force: true }); });
     await assert.rejects(client.request('stat', { path: '' }), error => error.code === 'Unavailable' && error.message.includes('Invalid core response'));
     assert.equal(client.closed, true);
+});
+
+test('revoked mount rejects an in-flight read before returning plaintext', async () => {
+    const provider = new VaultProvider();
+    let reply;
+    const client = { closed: false, request: () => new Promise(resolve => { reply = resolve; }) };
+    const root = provider.mount('race', client);
+    const reading = provider.readFile(root.with({ path: '/secret.txt' }));
+    provider.unmount(root.authority);
+    reply({ data: Buffer.from('secret').toString('base64') });
+    await assert.rejects(reading, { code: 'Unavailable' });
+    provider.dispose();
+});
+
+test('valid JSON with an invalid response envelope rejects immediately', { skip: process.platform === 'win32' }, async t => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-envelope-'));
+    const script = path.join(temp, 'core');
+    await fs.writeFile(script, '#!/bin/sh\nread -r line\nprintf \'{"id":1,"locked":false,"error":{"code":12}}\\n\'\nread -r line\n', { mode: 0o700 });
+    const client = new CoreClient(script, 5000);
+    t.after(async () => { client.dispose(); await fs.rm(temp, { recursive: true, force: true }); });
+    await assert.rejects(client.request('stat', { path: '' }), error => error.message.includes('Invalid core response'));
+    assert.equal(client.closed, true);
+});
+
+test('pending requests are bounded and shutdown rejects the accepted queue', { skip: process.platform === 'win32' }, async t => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-queue-'));
+    const script = path.join(temp, 'core');
+    await fs.writeFile(script, '#!/bin/sh\ncat >/dev/null\n', { mode: 0o700 });
+    const client = new CoreClient(script, 5000);
+    t.after(async () => { client.dispose(); await fs.rm(temp, { recursive: true, force: true }); });
+    const pending = Array.from({ length: 32 }, () => client.request('stat', { path: '' }));
+    const settled = Promise.allSettled(pending);
+    await assert.rejects(client.request('stat', { path: '' }), error => error.message.includes('busy'));
+    assert.equal(client.closed, false);
+    client.dispose();
+    assert((await settled).every(result => result.status === 'rejected'));
+});
+
+test('malformed file payload locks the provider instead of returning silently decoded data', async () => {
+    const provider = new VaultProvider();
+    let closed = false;
+    const client = { get closed() { return closed; }, request: async () => ({ data: '!!!!' }), dispose: () => { closed = true; } };
+    const root = provider.mount('invalid-data', client);
+    await assert.rejects(provider.readFile(root.with({ path: '/file' })), { code: 'Unavailable' });
+    assert.equal(closed, true);
+    await assert.rejects(provider.stat(root), { code: 'Unavailable' });
+    provider.dispose();
 });

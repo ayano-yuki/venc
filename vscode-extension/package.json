@@ -1,8 +1,8 @@
 {
   "name": "venc",
-  "displayName": "venc — Vault ENCrypt",
-  "description": "Edit encrypted vaults through an in-memory virtual filesystem.",
-  "version": "0.1.0",
+  "displayName": "venc \u2014 Vault ENCrypt",
+  "description": "Edit two-password encrypted vaults with a virtual filesystem and explicit session controls.",
+  "version": "0.2.0",
   "publisher": "ayano-yuki",
   "license": "MIT",
   "engines": {
@@ -37,6 +37,24 @@
       {
         "command": "venc.lockVault",
         "title": "venc: Lock Vault"
+      },
+      {
+        "command": "venc.openAnotherVault",
+        "title": "venc: Open Another Vault"
+      },
+      {
+        "command": "venc.lockAllVaults",
+        "title": "venc: Lock All Vaults",
+        "enablement": "venc.hasUnlockedVault"
+      },
+      {
+        "command": "venc.changePasswords",
+        "title": "venc: Change Vault Passwords",
+        "enablement": "venc.hasUnlockedVault"
+      },
+      {
+        "command": "venc.forgetVault",
+        "title": "venc: Forget Vault Location"
       }
     ],
     "configuration": {

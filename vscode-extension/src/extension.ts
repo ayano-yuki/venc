@@ -1,13 +1,16 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { access } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { access, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { CoreClient } from './coreClient';
 import { VaultProvider, SCHEME } from './vaultProvider';
 
-interface Mount { client: CoreClient; root: vscode.Uri }
+interface Mount { client: CoreClient; root: vscode.Uri; name: string; capabilities: string[] }
+interface Opened { vaultId: string; protocol: number; capabilities?: string[] }
 const mounts = new Map<string, Mount>();
 let provider: VaultProvider;
+let status: vscode.StatusBarItem;
 let busy = false;
 
 function owned(uri: vscode.Uri, authority: string): boolean { return uri.scheme === SCHEME && uri.authority === authority; }
@@ -20,54 +23,80 @@ function tabUris(tab: vscode.Tab): vscode.Uri[] {
 function tabsFor(authority: string): vscode.Tab[] {
     return vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tabUris(tab).some(uri => owned(uri, authority)));
 }
+function dirtyFor(authority: string): (vscode.TextDocument | vscode.NotebookDocument)[] {
+    return [...vscode.workspace.textDocuments, ...vscode.workspace.notebookDocuments]
+        .filter(document => owned(document.uri, authority) && document.isDirty);
+}
+function locations(context: vscode.ExtensionContext): Record<string, string> {
+    const saved = context.globalState.get<unknown>('vaultLocations');
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) { return {}; }
+    return Object.fromEntries(Object.entries(saved).filter(([id, value]) => /^[a-f0-9]{32}$/.test(id) && typeof value === 'string' && path.isAbsolute(value)));
+}
+function updateStatus(): void {
+    const locked = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === SCHEME && !mounts.has(folder.uri.authority)).length ?? 0;
+    status.text = busy ? '$(sync~spin) venc' : `$(lock) venc: ${mounts.size} open${locked ? ` / ${locked} locked` : ''}`;
+    status.tooltip = busy ? 'Vault operation in progress' : 'Manage encrypted vaults. Locking releases keys; VS Code editor buffers and backups are not securely erased.';
+    status.command = mounts.size ? 'venc.lockVault' : 'venc.openVault';
+    status.show();
+    void vscode.commands.executeCommand('setContext', 'venc.hasUnlockedVault', mounts.size > 0);
+}
 async function safetySettings(uri?: vscode.Uri): Promise<boolean> {
-    const files = vscode.workspace.getConfiguration('files', uri);
-    const history = vscode.workspace.getConfiguration('workbench.localHistory', uri);
-    if (files.get('hotExit') === 'off' && history.get('enabled') === false) { return true; }
+    const safe = () => vscode.workspace.getConfiguration('files', uri).get('hotExit') === 'off'
+        && vscode.workspace.getConfiguration('workbench.localHistory', uri).get('enabled') === false;
+    if (safe()) { return true; }
     const choice = await vscode.window.showWarningMessage(
-        'Vault editing requires Hot Exit and Local History to be disabled. Apply these user settings? This affects other files too.',
+        'Disable Hot Exit and Local History before editing vaults? This changes user settings for other files too. Background crash backups can still contain plaintext.',
         { modal: true }, 'Disable and Continue');
     if (choice !== 'Disable and Continue') { return false; }
     await vscode.workspace.getConfiguration('files').update('hotExit', 'off', vscode.ConfigurationTarget.Global);
     await vscode.workspace.getConfiguration('workbench.localHistory').update('enabled', false, vscode.ConfigurationTarget.Global);
-    if (vscode.workspace.getConfiguration('files', uri).get('hotExit') !== 'off'
-        || vscode.workspace.getConfiguration('workbench.localHistory', uri).get('enabled') !== false) {
-        throw new Error('Workspace settings override the required settings. Set files.hotExit to off and workbench.localHistory.enabled to false.');
-    }
+    if (!safe()) { throw new Error('Workspace settings override the required settings. Set files.hotExit to off and workbench.localHistory.enabled to false.'); }
     return true;
 }
-async function passwords(confirm: boolean): Promise<{ passwordA: string; passwordB: string } | undefined> {
+interface Passwords { passwordA: string; passwordB: string }
+function release(secret: Passwords): void { secret.passwordA = ''; secret.passwordB = ''; }
+async function passwords(confirm: boolean, label = 'Vault'): Promise<Passwords | undefined> {
     const ask = (prompt: string) => vscode.window.showInputBox({ prompt, password: true, ignoreFocusOut: true,
-        validateInput: value => !value || Buffer.byteLength(value) > 4096 ? 'Enter 1–4096 bytes.' : undefined });
-    const passwordA = await ask('Vault password A'); if (passwordA === undefined) { return; }
-    const passwordB = await ask('Vault password B'); if (passwordB === undefined) { return; }
+        validateInput: value => !value || Buffer.byteLength(value) > 4096 ? 'Enter a password (maximum 4096 bytes).' : undefined });
+    const passwordA = await ask(`${label} password A`); if (passwordA === undefined) { return; }
+    const passwordB = await ask(`${label} password B`); if (passwordB === undefined) { return; }
     if (confirm) {
-        if (await ask('Confirm password A') !== passwordA || await ask('Confirm password B') !== passwordB) {
-            throw new Error('Password confirmation did not match.');
-        }
+        const a = await ask('Confirm password A'); if (a === undefined) { return; }
+        const b = await ask('Confirm password B'); if (b === undefined) { return; }
+        if (a !== passwordA || b !== passwordB) { throw new Error('Password confirmation did not match.'); }
     }
     return { passwordA, passwordB };
 }
 async function executable(context: vscode.ExtensionContext): Promise<string> {
     const configured = vscode.workspace.getConfiguration('venc').get<string>('corePath', '');
-    const binary = configured || path.join(context.extensionPath, 'bin', process.platform === 'win32' ? 'venc.exe' : 'venc');
-    if (!path.isAbsolute(binary)) { throw new Error('venc.corePath must be an absolute path.'); }
-    await access(binary, process.platform === 'win32' ? constants.F_OK : constants.X_OK)
-        .catch(() => { throw new Error('Build the Rust core and set venc.corePath to its absolute path, or package it in bin/.'); });
-    return binary;
+    const candidate = configured || path.join(context.extensionPath, 'bin', process.platform === 'win32' ? 'venc.exe' : 'venc');
+    if (!path.isAbsolute(candidate)) { throw new Error('venc.corePath must be an absolute path.'); }
+    try {
+        const binary = await realpath(candidate);
+        if (!(await stat(binary)).isFile()) { throw new Error('not a file'); }
+        await access(binary, process.platform === 'win32' ? constants.F_OK : constants.X_OK);
+        return binary;
+    } catch { throw new Error('Build the Rust core and set venc.corePath to its absolute executable path, or install a VSIX with a bundled core.'); }
 }
-async function open(context: vscode.ExtensionContext, create: boolean, knownPath?: string): Promise<void> {
+async function chooseAuthority(context: vscode.ExtensionContext, activeOnly: boolean): Promise<string | undefined> {
+    const saved = locations(context);
+    const ids = activeOnly ? [...mounts.keys()] : [...new Set([...Object.keys(saved), ...mounts.keys()])];
+    if (!ids.length) { void vscode.window.showInformationMessage('No vaults available. Use venc: Open Vault or Create Vault.'); return; }
+    if (ids.length === 1) { return ids[0]; }
+    const choice = await vscode.window.showQuickPick(ids.map(id => ({
+        label: mounts.get(id)?.name ?? path.basename(saved[id] ?? id),
+        description: mounts.has(id) ? 'Unlocked' : 'Locked', detail: saved[id] ?? id, id,
+    })), { placeHolder: 'Choose a vault' });
+    return choice?.id;
+}
+async function open(context: vscode.ExtensionContext, create: boolean, knownPath?: string, expectedAuthority?: string): Promise<void> {
     if (!vscode.workspace.isTrusted) { throw new Error('Trust this workspace before opening a vault.'); }
-    if (!await safetySettings()) { return; }
-    const accepted = await vscode.window.showWarningMessage(
-        'The standard VS Code editor can write plaintext crash backups even with Hot Exit disabled. Use a profile with appropriately protected storage.',
-        { modal: true }, 'Continue');
-    if (accepted !== 'Continue') { return; }
     let vault = knownPath;
     if (!vault) {
         const selected = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
-            openLabel: create ? 'Select parent directory' : 'Open Vault' });
+            defaultUri: vscode.Uri.file(homedir()), openLabel: create ? 'Select parent directory' : 'Open Vault' });
         if (!selected?.length) { return; }
+        if (selected[0].scheme !== 'file' && selected[0].scheme !== 'vscode-remote') { throw new Error('Choose a vault on the extension host filesystem.'); }
         vault = selected[0].fsPath;
         if (create) {
             const name = await vscode.window.showInputBox({ prompt: 'New vault directory name', validateInput: value =>
@@ -76,78 +105,120 @@ async function open(context: vscode.ExtensionContext, create: boolean, knownPath
             vault = path.join(vault, name);
         }
     }
-    const secret = await passwords(create); if (!secret) { return; }
+    const binary = await executable(context); // Report setup errors before asking for secrets.
+    const safetyUri = expectedAuthority ? vscode.Uri.from({ scheme: SCHEME, authority: expectedAuthority, path: '/' }) : undefined;
+    if (!await safetySettings(safetyUri)) { return; }
+    const accepted = await vscode.window.showWarningMessage(
+        'The standard VS Code editor can write plaintext crash backups even with Hot Exit disabled. Use a profile with appropriately protected storage.',
+        { modal: true }, 'Continue');
+    if (accepted !== 'Continue') { return; }
     let client: CoreClient | undefined;
+    let secret: Passwords | undefined;
     try {
-        client = new CoreClient(await executable(context));
-        const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: create ? 'Creating vault…' : 'Unlocking vault…' },
-            () => client!.request<{ vaultId: string; protocol: number }>(create ? 'init' : 'unlock', { vault, ...secret }));
-        if (result.protocol !== 1 || !/^[a-f0-9]{32}$/.test(result.vaultId)) { throw new Error('Unsupported core protocol.'); }
+        client = new CoreClient(binary);
+        try {
+            const hello = await client.request<{ protocol: number }>('hello', {});
+            if (!hello || hello.protocol !== 1) { throw new Error('protocol mismatch'); }
+        } catch { throw new Error('The executable does not support the current venc protocol. Update the Rust core before entering passwords.'); }
+        secret = await passwords(create); if (!secret) { return; }
+        let result: Opened;
+        try {
+            result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: create ? 'Creating vault…' : 'Unlocking vault…' },
+                () => client!.request<Opened>(create ? 'init' : 'unlock', { vault, ...secret }));
+        } finally { release(secret); }
+        if (!result || result.protocol !== 1 || !/^[a-f0-9]{32}$/.test(result.vaultId)
+            || (result.capabilities !== undefined && (!Array.isArray(result.capabilities) || result.capabilities.some(item => typeof item !== 'string')))) {
+            throw new Error('Unsupported core protocol. Update the Rust core and extension together.');
+        }
         const authority = result.vaultId;
+        if (expectedAuthority && expectedAuthority !== authority) { throw new Error('The vault at this location has a different identity. Use Open Another Vault to open it explicitly.'); }
         if (mounts.has(authority)) { throw new Error('Vault is already open.'); }
         const root = vscode.Uri.from({ scheme: SCHEME, authority, path: '/' });
         if (!await safetySettings(root)) { return; }
-        const locations = context.globalState.get<Record<string, string>>('vaultLocations', {});
-        await context.globalState.update('vaultLocations', { ...locations, [authority]: vault });
-        provider.mount(authority, client);
-        mounts.set(authority, { client, root });
+        const canonical = await realpath(vault);
+        await context.globalState.update('vaultLocations', { ...locations(context), [authority]: canonical });
         const mountedClient = client;
+        const mount: Mount = { client, root, name: path.basename(canonical), capabilities: result.capabilities ?? [] };
+        provider.mount(authority, client); mounts.set(authority, mount);
         client.on('closed', () => {
-            if (mounts.get(authority)?.client === mountedClient) { provider.unmount(authority); mounts.delete(authority); }
+            if (mounts.get(authority)?.client === mountedClient) {
+                provider.unmount(authority); mounts.delete(authority); updateStatus();
+                void vscode.window.showErrorMessage(`Vault “${mount.name}” disconnected. Unsaved editor buffers may remain; reopen the vault to save them.`);
+            }
         });
         client = undefined; // Mount now owns it.
         if (!vscode.workspace.workspaceFolders?.some(folder => folder.uri.toString() === root.toString())) {
-            if (!vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders?.length ?? 0, 0, { uri: root, name: 'venc Vault' })) {
+            if (!vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders?.length ?? 0, 0, { uri: root, name: `venc: ${mount.name}` })) {
                 provider.unmount(authority); mounts.delete(authority); mountedClient.dispose();
                 throw new Error('Cannot add the virtual workspace folder.');
             }
         }
+        updateStatus();
         await vscode.commands.executeCommand('workbench.view.explorer');
-    } finally {
-        // JavaScript strings cannot be reliably zeroized; release references promptly.
-        secret.passwordA = ''; secret.passwordB = '';
-        client?.dispose();
-    }
+    } finally { if (secret) { release(secret); } client?.dispose(); }
 }
-async function lock(authority: string): Promise<void> {
-    const mount = mounts.get(authority); if (!mount) { return; }
-    const documents = () => vscode.workspace.textDocuments.filter(document => owned(document.uri, authority) && document.isDirty);
-    if (documents().length || tabsFor(authority).some(tab => tab.isDirty)) {
+async function lock(authority: string): Promise<boolean> {
+    const mount = mounts.get(authority); if (!mount) { return true; }
+    if (dirtyFor(authority).length || tabsFor(authority).some(tab => tab.isDirty)) {
         const choice = await vscode.window.showWarningMessage('Save vault changes before locking?', { modal: true }, 'Save and Lock');
-        if (choice !== 'Save and Lock') { return; }
-        for (const document of documents()) { if (!await document.save()) { throw new Error('Save failed. Vault remains open.'); } }
-        for (const notebook of vscode.workspace.notebookDocuments.filter(document => owned(document.uri, authority) && document.isDirty)) {
-            if (!await notebook.save()) { throw new Error('Notebook save failed. Vault remains open.'); }
+        if (choice !== 'Save and Lock') { return false; }
+        for (const document of dirtyFor(authority)) {
+            if (!await document.save()) { throw new Error('Save failed. Vault remains open.'); }
         }
     }
     const tabs = tabsFor(authority);
-    if (tabs.some(tab => tab.isDirty)) { throw new Error('Close or save remaining vault editors before locking.'); }
-    if (tabs.length && !await vscode.window.tabGroups.close(tabs, true)) { return; }
-    if (documents().length) { throw new Error('Vault changed while locking. Save and retry.'); }
-    // Revoke the provider before the await so no new file requests can be sent.
-    provider.unmount(authority); mounts.delete(authority);
+    if (tabs.some(tab => tab.isDirty) || dirtyFor(authority).length) { throw new Error('Save remaining vault editors before locking.'); }
+    if (tabs.length && !await vscode.window.tabGroups.close(tabs, true)) { return false; }
+    if (dirtyFor(authority).length || tabsFor(authority).length) { throw new Error('Vault editors changed while locking. Close or save them and retry.'); }
+    provider.unmount(authority); mounts.delete(authority); updateStatus();
     try { await mount.client.request('lock', {}); } finally { mount.client.dispose(); }
-    // Keep a locked workspace URI. Removing the first folder restarts the extension host.
+    return true; // Keep the locked workspace URI: removing the first folder restarts the host.
+}
+async function changePasswords(context: vscode.ExtensionContext): Promise<void> {
+    const authority = await chooseAuthority(context, true); if (!authority) { return; }
+    const mount = mounts.get(authority)!;
+    if (!mount.capabilities.includes('changePasswords')) { throw new Error('Update the Rust core to support password changes in VS Code.'); }
+    const old = await passwords(false, 'Current'); if (!old) { return; }
+    let next: Passwords | undefined;
+    try {
+        next = await passwords(true, 'New'); if (!next) { return; }
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Changing vault passwords…' }, () =>
+            mount.client.request('changePasswords', { oldA: old.passwordA, oldB: old.passwordB, newA: next!.passwordA, newB: next!.passwordB }));
+    } finally { release(old); if (next) { release(next); } }
+    void vscode.window.showInformationMessage('Vault passwords changed. Older vault backups still work with their older passwords.');
 }
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    busy = false;
     provider = new VaultProvider();
-    context.subscriptions.push(provider, vscode.workspace.registerFileSystemProvider(SCHEME, provider, { isCaseSensitive: true, isReadonly: false }));
-    const command = (name: string, action: () => Promise<void>) => context.subscriptions.push(vscode.commands.registerCommand(name, async () => {
-        if (busy) { return; }
-        busy = true;
-        try { await action(); } catch (error) { await vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Vault operation failed.'); }
-        finally { busy = false; }
+    status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
+    status.name = 'venc Vaults';
+    context.subscriptions.push(status, provider, vscode.workspace.registerFileSystemProvider(SCHEME, provider, { isCaseSensitive: true, isReadonly: false }));
+    const command = (name: string, action: () => Promise<unknown>) => context.subscriptions.push(vscode.commands.registerCommand(name, async () => {
+        if (busy) { void vscode.window.showInformationMessage('Finish or cancel the current vault operation before starting another.'); return; }
+        busy = true; updateStatus();
+        try { await action(); } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Vault operation failed.'); }
+        finally { busy = false; updateStatus(); }
     }));
     command('venc.createVault', () => open(context, true));
+    command('venc.openAnotherVault', () => open(context, false));
     command('venc.openVault', async () => {
-        const locations = context.globalState.get<Record<string, string>>('vaultLocations', {});
+        const saved = locations(context);
         const locked = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === SCHEME && !mounts.has(folder.uri.authority)) ?? [];
-        if (locked.length === 1 && locations[locked[0].uri.authority]) { await open(context, false, locations[locked[0].uri.authority]); }
-        else { await open(context, false); }
+        if (locked.length) {
+            const choice = locked.length === 1 ? locked[0] : await vscode.window.showQuickPick(locked.map(folder => ({ label: folder.name, folder })), { placeHolder: 'Choose a locked vault' }).then(item => item?.folder);
+            if (!choice) { return; }
+            await open(context, false, saved[choice.uri.authority], choice.uri.authority);
+        } else { await open(context, false); }
     });
-    command('venc.lockVault', async () => {
-        const authority = mounts.size === 1 ? mounts.keys().next().value : (await vscode.window.showQuickPick([...mounts.keys()], { placeHolder: 'Choose vault to lock' }));
-        if (authority) { await lock(authority); }
+    command('venc.lockVault', async () => { const authority = await chooseAuthority(context, true); if (authority) { await lock(authority); } });
+    command('venc.lockAllVaults', async () => { for (const authority of [...mounts.keys()]) { if (!await lock(authority)) { break; } } });
+    command('venc.changePasswords', () => changePasswords(context));
+    command('venc.forgetVault', async () => {
+        const authority = await chooseAuthority(context, false); if (!authority) { return; }
+        if (!await lock(authority)) { return; }
+        const saved = locations(context); delete saved[authority];
+        await context.globalState.update('vaultLocations', saved);
+        void vscode.window.showInformationMessage('Remembered vault location removed. The encrypted vault is unchanged.');
     });
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('files.hotExit') || event.affectsConfiguration('workbench.localHistory.enabled')) {
@@ -158,10 +229,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     void vscode.window.showErrorMessage('Vault locked because Hot Exit or Local History was enabled. Editor buffers may still exist; restore the settings before reopening.');
                 }
             }
+            updateStatus();
         }
+    }), vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        for (const [authority, mount] of mounts) {
+            if (!vscode.workspace.workspaceFolders?.some(folder => owned(folder.uri, authority))) {
+                provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
+                if (dirtyFor(authority).length) { void vscode.window.showWarningMessage('Vault disconnected after removing its folder. Reopen it to save remaining editor buffers.'); }
+            }
+        }
+        updateStatus();
     }));
-    // Adding the first workspace folder can restart the extension host. Reauthenticate
-    // after the restart; persist only the public vault location, never a password/key.
+    updateStatus();
     if (vscode.workspace.workspaceFolders?.some(folder => folder.uri.scheme === SCHEME)) {
         void vscode.window.showInformationMessage('Vault workspace is locked.', 'Unlock').then(choice => {
             if (choice === 'Unlock') { return vscode.commands.executeCommand('venc.openVault'); }
@@ -169,4 +248,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
     }
 }
-export function deactivate(): void { for (const mount of mounts.values()) { mount.client.dispose(); } mounts.clear(); }
+export function deactivate(): void {
+    const clients = [...mounts.values()].map(mount => mount.client);
+    mounts.clear();
+    for (const client of clients) { client.dispose(); }
+}
