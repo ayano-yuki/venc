@@ -4,3 +4,4 @@
 /vscode-extension/.vscode-test/
 /vscode-extension/bin/
 /vscode-extension/*.vsix
+/vscode-extension/.venc-readme.*.md

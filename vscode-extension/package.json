@@ -1,6 +1,6 @@
 {
   "name": "venc",
-  "displayName": "venc \u2014 Vault ENCrypt",
+  "displayName": "venc — Vault ENCrypt",
   "description": "Edit two-password encrypted vaults with a virtual filesystem and explicit session controls.",
   "version": "0.2.0",
   "publisher": "ayano-yuki",
@@ -74,7 +74,7 @@
     "vscode:prepublish": "npm run compile",
     "test": "npm run compile && node test/provider.test.cjs",
     "test:integration": "npm run compile && node test/run-vscode.cjs",
-    "package": "vsce package --no-dependencies --allow-missing-repository",
+    "package": "node scripts/package.cjs",
     "test:backups": "npm run compile && node test/run-backup-probe.cjs"
   },
   "devDependencies": {

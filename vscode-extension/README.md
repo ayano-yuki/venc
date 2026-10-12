@@ -1,50 +1,79 @@
 # venc for VS Code
 
-二つのパスワードで暗号化 Vault を開き、`venc://<vault-id>/` の仮想ファイルを編集する拡張です。
-ファイルの保存は Rust 子プロセスが暗号化して処理します。拡張が復号用の一時ファイルを作ることはありません。
+[English](README.md) | [日本語](README.ja.md)
 
-## 使用
+Edit a two-password encrypted vault through a `venc://<vault-id>/` virtual workspace.
+A Rust child process authenticates and encrypts saves. The extension does not create decrypted temporary files.
 
-1. VSIX を VS Code の「Extensions: Install from VSIX...」でインストールします。
-2. コアを同梱しない場合は、`venc.corePath` に実行ファイルの**絶対パス**を指定します。
-3. コマンドパレットから `venc: Create Vault` または `venc: Open Vault` を実行します。
-4. 二つのパスワードを入力すると、Explorer に `venc Vault` が追加されます。
-5. Explorer でファイル・フォルダを作成し、通常のエディタで編集・保存できます。
-6. `venc: Lock Vault` でロックします。未保存の場合は保存を確認し、保存に失敗・キャンセルしたときは開いた状態を維持します。
+**The standard editor can still create plaintext crash backups.** Hot Exit off does not disable background backup creation. This is a tested limitation, not a no-plaintext-on-disk guarantee.
 
-フォルダの追加で VS Code の拡張ホストが再起動することがあります。
-その場合は「Vault workspace is locked」の **Unlock**、または `venc: Open Vault` で再認証します。
-ロック後もワークスペース URI は残ります。パスワードや鍵は再起動後に復元しません。
-拡張は再接続用に Vault ID と実ディレクトリのパスだけを VS Code の拡張状態へ記録します。
-リモート環境では拡張とコアはワークスペース側で動きます。コアのパスと Vault の場所はその環境のものを指定してください。
-ブラウザ版 VS Code は子プロセスを利用できないため未対応です。
+## Install and open
 
-## 平文の保存に関する制約
+1. Install the VSIX with **Extensions: Install from VSIX...** in desktop VS Code 1.95+.
+2. If using a custom core, set **venc.corePath** to its absolute executable path on the extension host. Use only a trusted executable.
+3. Run **venc: Create Vault** to select a parent and a new directory name, or **venc: Open Vault** to select an existing vault.
+4. Review the backup limitation. If offered, explicitly approve disabling Hot Exit and Local History in user settings.
+5. Enter both passwords. A folder named **venc: your-vault-name** appears in Explorer.
+6. Create folders/files, edit, and save as usual. A file can contain at most 16 MiB.
 
-**標準エディタを使う FileSystemProvider は、VS Code 全体の平文非保存を保証できません。**
-VS Code 1.95.3 で、`files.hotExit: "off"` にしても、未保存のテキストがディスクのクラッシュ用バックアップへ
-書かれることを実機テストで確認しています。Hot Exit の無効化はバックアップ生成そのものを止めません。
+Executable and protocol setup errors are checked before requesting passwords. Cancelling a password prompt makes no authenticated change.
+Adding the first workspace folder can restart the extension host. Choose **Unlock** in the locked-workspace notification or run **Open Vault** again after the restart. Passwords are never restored automatically.
 
-拡張は開く前にこの制約を表示し、Hot Exit と Local History を無効にする設定を確認します。
-設定変更を選択すると**他のファイルにも適用されるユーザー設定**を変更します。自動で元へ戻しません。
-この設定確認は漏洩経路を減らすためのもので、平文非保存の保証ではありません。
-過去に作られたバックアップ・履歴も削除しません。
+## Commands and session state
 
-厳密にディスクへ平文を残さない用途では、VS Code のユーザーデータ・ワークスペース状態・バックアップを
-含む保存先を RAM ファイルシステムなどへ置く隔離環境が別途必要です。本拡張はその環境を作成・検証しません。
-別案として暗号化バックアップを制御できるカスタムエディタが必要ですが、今回は未実装です。
-他の拡張機能、言語サーバー、検索、コピー、Save As、OS の swap・クラッシュダンプにも平文が渡る可能性があります。
+| Command | Behavior |
+| --- | --- |
+| Create Vault | Create a new encrypted directory; existing directories are refused |
+| Open Vault | Unlock a restored vault folder, or choose an existing vault |
+| Open Another Vault | Browse for an additional vault even when a locked folder is present |
+| Lock Vault | Select an open vault; save and close its editors before releasing keys |
+| Lock All Vaults | Lock open vaults in order; stop if saving fails or locking is cancelled |
+| Change Vault Passwords | Reauthenticate both current passwords and confirm a new pair |
+| Forget Vault Location | Lock the vault if open, then delete its remembered physical location |
 
-ロックはコアの鍵を破棄し、仮想 FS を無効化して対象の標準エディタタブを閉じます。
-VS Code のすべてのメモリ・外部拡張のコピー・既存バックアップの消去は保証しません。
-コアのクラッシュや設定変更による緊急ロックでは、編集中のエディタバッファは残る場合があります。
+The status bar shows open and locked counts. Click it to lock an open vault or open a locked one.
+Multiple vaults use their directory names and physical paths in selection lists. Physical location metadata is not secret.
+A restored folder is authenticated against its expected vault ID; a different vault substituted at that path is refused.
 
-参考: [VS Code WorkingCopyBackupTracker](https://github.com/microsoft/vscode/blob/1.95.3/src/vs/workbench/services/workingCopy/common/workingCopyBackupTracker.ts)、
-[FileSystemProvider API](https://code.visualstudio.com/api/references/vscode-api#FileSystemProvider)。
+A cancelled lock, failed save, or cancelled editor close keeps the vault open. Hidden dirty notebook documents are included in the save check.
+Locking revokes the provider before releasing the core session; an in-flight read cannot return its result after that revocation.
+The locked workspace URI remains so the host need not restart again.
 
-## 開発・検証
+Changing passwords does not re-encrypt file contents. **Old snapshots still work with their older passwords.**
+No recovery key exists. Use distinct, strong passwords and retain independent encrypted backups.
 
-リポジトリのルートで:
+Removing a vault workspace folder disconnects its session. A core failure, timeout, malformed response, or unsafe history-setting change also invalidates access.
+Unexpected disconnects are reported, and editor buffers may remain so they can be saved after reauthentication. Emergency disconnects do not discard unsaved content or claim to erase all plaintext.
+
+## Settings and trust
+
+`venc.corePath` is a machine setting. An empty value uses the bundled `bin/venc` (`bin/venc.exe` on Windows).
+The extension requires a trusted workspace and runs on the workspace host. In SSH/WSL/containers, the executable and vault paths refer to that host.
+Browser-only VS Code is unsupported. A native executable must match the host OS/CPU and runtime requirements.
+The core must implement the initial protocol handshake. Incompatible binaries are refused before asking for passwords. Cores that omit the password-change capability are refused for that command.
+
+The opening flow checks `files.hotExit: "off"` and `workbench.localHistory.enabled: false`.
+Approving the setting change affects **other files in your user profile** and is not automatically reverted.
+Workspace overrides must also meet these settings. A later unsafe change disconnects the vault.
+The extension remembers only vault IDs and physical directory paths in local extension state. **Forget Vault Location** removes that mapping, leaves the workspace URI, and does not delete the encrypted vault.
+
+## Plaintext storage limits
+
+In a normal VS Code 1.95.3 profile, an unsaved virtual text document is backed up in plaintext even with Hot Exit off.
+The settings above reduce persistence paths but do not prevent all backups or remove older copies.
+
+For a strict no-plaintext-on-disk requirement, separately configure and validate an isolated environment whose VS Code user data, workspace state, and backup locations use appropriate memory-backed storage.
+venc does not configure or verify that environment. RAM storage alone does not address swap, hibernation, crash dumps, or other processes.
+A custom editor with encrypted backup handling is a separate future design; it is not implemented.
+
+Other extensions, language servers, editor search, clipboard operations, Save As, and OS facilities may access plaintext.
+Lock closes recognized standard vault tabs and releases Rust keys; it does not securely erase VS Code memory, third-party copies, or existing backups.
+Do not add untrusted vault configuration to a trusted workspace or assume encrypted content is safe to execute.
+See [the security model](../SECURITY.md) for remaining work.
+
+## Develop, test, and package
+
+Requirements: Rust, a C linker, Node.js 22.12+, and npm. From the repository root:
 
 ```sh
 cargo build --locked
@@ -55,28 +84,21 @@ npm run test:integration
 npm run test:backups
 ```
 
-`npm test` は実際の Rust 子プロセスを使ってプロバイダを検証します。
-`npm run test:integration` は VS Code 1.95.3 を取得し、隔離した一時ユーザープロファイルで
-実際の文書編集・保存、名前変更、ロック、再解除、削除を検証します。
-`npm run test:backups` は通常の拡張起動を使い、バックアップへの平文保存を再現・検証します。
-開発モードではバックアップのディスク保存先が省略されるため、この検査を分けています。
-Linux では GUI ディスプレイ（または Xvfb）と Electron 用のシステムライブラリが必要です。
-`VENC_TEST_CORE` を指定すると別のコア実行ファイルでテストできます。
+Provider tests run real Rust processes and cover filesystem contracts, authentication, password changes, lock cancellation, dirty notebooks, queue limits, malformed responses, and revocation races.
+`test:integration` pins VS Code 1.95.3 and exercises real document editing and saving in an isolated development profile.
+`test:backups` runs a disposable normal installed-extension profile to check actual disk backup behavior; development profiles can omit that backup location.
+Linux editor tests need a display/Xvfb and Electron libraries. Set `VENC_TEST_CORE` to select another core binary.
 
-このディレクトリを VS Code で開き、`venc.corePath` を設定して F5 で開発用拡張ホストを起動できます。
-
-配布用 VSIX は、対象 OS・CPU 向けにビルドしたコアを `bin/venc`（Windows は `bin/venc.exe`）へ入れて作成します。
+Open this directory in VS Code, set `venc.corePath`, and press F5 to launch the development host.
+Create a host-specific distributable with:
 
 ```sh
-# リポジトリのルートで実行（Linux x64 の例）
-cargo build --release --locked
-mkdir -p vscode-extension/bin
-cp target/release/venc vscode-extension/bin/venc
-cd vscode-extension
-npm run package -- --target linux-x64
+npm run package
 ```
 
-ビルド環境に由来する動的ライブラリや Nix の絶対パスが含まれる実行ファイルは、別端末で動くとは限りません。
-対象環境で検証してください。コアを同梱しない VSIX では `venc.corePath` を設定します。
-この変更で用意した Linux x64 VSIX は静的リンクしたコアを含みます。macOS・Windows 向けパッケージは未検証です。
-ファイル上限は 16 MiB、不要な暗号化オブジェクトの回収とチャンク暗号化は未対応です。
+The script builds the core for the current host, copies the new binary to `bin/`, and packages compiled extension code and both README languages.
+Cross-platform `--target` values are refused; build on a matching host. Dynamic/Nix runtime dependencies must be validated on the target machine.
+For Linux builds with static libraries available, `RUSTFLAGS="-C target-feature=+crt-static" npm run package` can produce a static core.
+The provided Linux x64 VSIX was verified locally. macOS and Windows packages are not yet locally verified.
+
+Source references: [VS Code FileSystemProvider](https://code.visualstudio.com/api/references/vscode-api#FileSystemProvider), [VS Code backup tracker](https://github.com/microsoft/vscode/blob/1.95.3/src/vs/workbench/services/workingCopy/common/workingCopyBackupTracker.ts).

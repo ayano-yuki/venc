@@ -5,3 +5,7 @@ test/**
 node_modules/**
 tsconfig.json
 package-lock.json
+scripts/**
+README.md
+README.ja.md
+bin/.venc.*.tmp
