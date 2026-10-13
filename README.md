@@ -2,6 +2,8 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
+[Step-by-step usage guide (Japanese)](USAGE.md)
+
 venc is a two-password encrypted vault with a Rust core, a CLI, and a VS Code extension.
 Open a vault as a `venc://` virtual workspace and edit UTF-8 files in a protected custom editor with encrypted saves and crash drafts.
 Both passwords are needed to recover the vault master key. This is **not two-factor authentication**.

@@ -2,6 +2,8 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
+[Step-by-step usage guide (Japanese)](../USAGE.md)
+
 Edit a two-password encrypted vault with a protected UTF-8 editor and a `venc://<vault-id>/` virtual workspace.
 Rust authenticates, encrypts saves, and encrypts unsaved crash drafts. Both passwords are required; this is not two-factor authentication.
 

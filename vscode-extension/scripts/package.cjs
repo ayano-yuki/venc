@@ -33,17 +33,22 @@ try {
     throw new Error('Cannot replace the bundled core. Close extension hosts that lock the executable and retry.', { cause: error });
 } finally { fs.rmSync(stagedCore, { force: true }); }
 // A local VSIX has no repository URL for relative documentation links. Bundle
-// both languages and the security model into one self-contained README instead
+// both languages, the usage guide, and the security model into one README instead
 // of inventing a public repository location or publishing broken links.
 const body = name => fs.readFileSync(path.join(extension, name), 'utf8')
     .replace(/^# venc for VS Code\s*\n/, '')
     .replace(/\[English\]\(README\.md\) \| \[日本語\]\(README\.ja\.md\)/, '')
+    .replace(/\(\.\.\/USAGE\.md\)/g, '(#usage)')
     .replace(/\(\.\.\/SECURITY\.md\)/g, '(#security-model-and-hardening-status)');
+const usage = fs.readFileSync(path.join(root, 'USAGE.md'), 'utf8')
+    .replace(/\(vscode-extension\/README\.ja\.md\)/g, '(#japanese)')
+    .replace(/\(SECURITY\.md\)/g, '(#security-model-and-hardening-status)');
 const readme = `.venc-readme.${randomUUID()}.md`;
 const location = path.join(extension, readme);
 try {
     fs.writeFileSync(location, '# venc for VS Code\n\n[English](#english) | [日本語](#japanese)\n\n<a id="english"></a>\n\n'
         + body('README.md') + '\n<a id="japanese"></a>\n\n' + body('README.ja.md')
+        + '\n<a id="usage"></a>\n\n' + usage
         + '\n' + fs.readFileSync(path.join(root, 'SECURITY.md'), 'utf8'), { flag: 'wx' });
     execFileSync(process.execPath, [require.resolve('@vscode/vsce/vsce'), 'package', '--no-dependencies', '--allow-missing-repository', '--readme-path', readme, ...args],
         { cwd: extension, stdio: 'inherit' });

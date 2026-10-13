@@ -2,6 +2,8 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
+初めて使う場合は、画面操作を順番に説明した [USAGE.md](USAGE.md) を参照してください。
+
 venc は、二つのパスワードを必要とする暗号化 Vault です。Rust コア、CLI、VS Code 拡張を提供します。
 Vault を `venc://` の仮想ワークスペースとして開き、VS Code で編集し、保存時に暗号化します。
 両方のパスワードが必要ですが、**二要素認証ではありません**。
