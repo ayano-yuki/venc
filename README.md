@@ -3,16 +3,16 @@
 [English](README.md) | [日本語](README.ja.md)
 
 venc is a two-password encrypted vault with a Rust core, a CLI, and a VS Code extension.
-Open a vault as a `venc://` virtual workspace, edit files in VS Code, and encrypt changes when saving.
+Open a vault as a `venc://` virtual workspace and edit UTF-8 files in a protected custom editor with encrypted saves and crash drafts.
 Both passwords are needed to recover the vault master key. This is **not two-factor authentication**.
 
-**Security boundary:** the provider writes ciphertext, but the standard VS Code editor can write plaintext crash backups even with Hot Exit disabled. This has been reproduced in VS Code 1.95.3. Do not assume that an ordinary VS Code profile keeps plaintext off disk. See [the security model](SECURITY.md) before storing sensitive data.
+**Security boundary:** protected mode is the default. It denies standard filesystem plaintext reads, avoids the standard text model, encrypts custom-editor crash drafts inside the vault, and denies Save As. Compatibility mode explicitly opts back into native editor plaintext exposure. Host memory, swap, dumps, clipboard, and previously created copies remain outside this protection. See [the security model](SECURITY.md).
 
 ## VS Code extension
 
 Install a VSIX using **Extensions: Install from VSIX...**, then run **venc: Create Vault** or **venc: Open Vault**.
 The extension asks for both passwords and adds a named virtual workspace folder to Explorer.
-Use normal file/folder creation, editing, saving, renaming, and deletion.
+Create folders and empty files in Explorer, then open files from **venc: Protected Files** or **venc: Open in Protected Editor**. Save with Ctrl/Cmd+S; close documents before renaming/deleting them or their parent folders. UTF-8 text only, at most 16 MiB; language servers and notebooks require unsafe compatibility access.
 
 The status bar shows open and locked vault counts. Commands also include **Open Another Vault**, **Lock Vault**, **Lock All Vaults**, **Change Vault Passwords**, and **Forget Vault Location**.
 A cancelled lock or failed save leaves the vault open. Removing its workspace folder releases the core session.
@@ -43,7 +43,7 @@ npm run test:integration
 npm run test:backups
 ```
 
-The first exercises actual VS Code document editing and saving. The second uses a disposable normal profile to reproduce the plaintext crash-backup limitation. Test profiles and data are removed afterwards.
+The first exercises actual VS Code compatibility editing and extension activation. The second uses a disposable normal profile to verify encrypted custom-editor backups and scan for document plaintext, with the native editor backup as an unsafe control. Test profiles and data are removed afterwards.
 CI is configured for Rust and provider tests on Linux, macOS, and Windows, and editor tests on Linux. These CI jobs have not been executed remotely as part of this change; local validation was on Linux x64.
 
 ## Package
@@ -93,11 +93,11 @@ IPC frames, queued writes, pending requests, KDF parameters, and file sizes have
 | `venc-crypto` | Argon2id, HKDF-SHA256, XChaCha20-Poly1305, zeroizing key buffers |
 | `venc-vault` | Encrypted metadata, file/directory operations, session ownership, password changes |
 | `venc-cli` | Terminal commands and the extension's IPC server |
-| `vscode-extension` | Vault lifecycle UI and virtual FileSystemProvider |
+| `vscode-extension` | Protected CustomEditorProvider, encrypted drafts, vault lifecycle UI, and virtual FileSystemProvider |
 
 Argon2id v19 derives two independent 32-byte keys sequentially, using separate 16-byte salts and fixed parameters of 64 MiB, 3 iterations, and parallelism 1.
 HKDF-SHA256 combines the keys to wrap a randomly generated 256-bit vault master key (VMK).
-Separate HKDF domains derive metadata and file-key wrapping keys from the VMK.
+Separate HKDF domains derive metadata, file-key wrapping, and editor-backup keys from the VMK. Protected saves compare immutable object revisions to prevent stale drafts overwriting later edits. Drafts authenticate their vault ID, opaque backup ID, original path, and base revision.
 Every file write creates a fresh file encryption key, object ID, and random 24-byte nonces.
 AEAD associated data binds format version, purpose, vault ID, and object ID.
 
@@ -107,7 +107,8 @@ my-vault/
 ├── metadata.enc     # encrypted paths, directories, times, and wrapped file keys
 ├── .session.lock    # exclusive process lock
 └── objects/
-    └── <random-id>.enc
+    ├── <random-id>.enc
+    └── .backup.<random-id>.enc  # encrypted custom-editor draft
 ```
 
 The prototype v1 format stores byte arrays in JSON. File and decrypted metadata limits are each 16 MiB.
@@ -117,14 +118,14 @@ Writes sync a new immutable encrypted object before atomically replacing encrypt
 Unix builds also sync directories and create files with mode 0600 and directories with mode 0700.
 A commit error locks the session to prevent further writes from stale in-memory state. Power-loss guarantees still depend on the OS/filesystem and have not been exhaustively tested.
 
-Replaced/deleted objects are retained to preserve crash safety; garbage collection is not implemented.
+Replaced/deleted objects and orphan encrypted drafts can remain; automatic enumeration/recovery of orphan drafts and garbage collection are not implemented. An unexpected disconnect closes protected panels and can lose changes since the last completed encrypted backup.
 Initialization failures can leave an incomplete new directory. Do not reuse it automatically or treat it as a completed vault.
 
 ## Remaining limits
 
 This is an unaudited prototype. Recovery keys, chunk encryption, recursive folder import, automatic garbage collection, and rollback detection are not implemented.
 Losing either password prevents recovery. Changing passwords does not revoke old snapshots containing the same master key.
-Object counts, sizes, and filesystem times remain visible. OS swap, crash dumps, other extensions, language servers, Save As, and editor backups can retain plaintext.
+Object counts, sizes, and filesystem times remain visible. VS Code profile records can reveal document paths and vault locations. OS swap, crash dumps, clipboard, a compromised host, and prior copies can retain plaintext. Native editor backups, language servers, and Save As expose plaintext when compatibility access is explicitly enabled.
 Path checks reject symlinks in vault objects but do not fully prevent a hostile local process racing filesystem changes.
 Use trusted host storage and independent encrypted backups; see [SECURITY.md](SECURITY.md) for exact guarantees and open work.
 

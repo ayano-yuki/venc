@@ -2,74 +2,61 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-Edit a two-password encrypted vault through a `venc://<vault-id>/` virtual workspace.
-A Rust child process authenticates and encrypts saves. The extension does not create decrypted temporary files.
+Edit a two-password encrypted vault with a protected UTF-8 editor and a `venc://<vault-id>/` virtual workspace.
+Rust authenticates, encrypts saves, and encrypts unsaved crash drafts. Both passwords are required; this is not two-factor authentication.
 
-**The standard editor can still create plaintext crash backups.** Hot Exit off does not disable background backup creation. This is a tested limitation, not a no-plaintext-on-disk guarantee.
+**Protected mode is the default.** Document contents are kept out of VS Code's standard text model, filesystem reads are denied, and custom-editor backups contain encrypted data in the vault. Save As is denied.
+This closes the standard editor's plaintext backup path. It does not isolate plaintext memory from a compromised host or erase swap, dumps, clipboard copies, or older backups.
 
-## Install and open
+## Install and edit
 
-1. Install the VSIX with **Extensions: Install from VSIX...** in desktop VS Code 1.95+.
-2. If using a custom core, set **venc.corePath** to its absolute executable path on the extension host. Use only a trusted executable.
-3. Run **venc: Create Vault** to select a parent and a new directory name, or **venc: Open Vault** to select an existing vault.
-4. Review the backup limitation. If offered, explicitly approve disabling Hot Exit and Local History in user settings.
-5. Enter both passwords. A folder named **venc: your-vault-name** appears in Explorer.
-6. Create folders/files, edit, and save as usual. A file can contain at most 16 MiB.
+1. Install a host-specific VSIX using **Extensions: Install from VSIX...** in desktop VS Code 1.95+.
+2. Run **venc: Create Vault** to choose a parent and a new name, or **venc: Open Vault** for an existing vault.
+3. Enter both passwords. A **venc: your-vault-name** workspace folder appears.
+4. Create folders and empty files in Explorer. Open files from **venc: Protected Files**, or right-click a vault file and choose **venc: Open in Protected Editor**.
+5. Edit UTF-8 text and press Ctrl/Cmd+S. Each file is limited to 16 MiB. Binary files and malformed UTF-8 are refused without changing the file.
 
-Executable and protocol setup errors are checked before requesting passwords. Cancelling a password prompt makes no authenticated change.
-Adding the first workspace folder can restart the extension host. Choose **Unlock** in the locked-workspace notification or run **Open Vault** again after the restart. Passwords are never restored automatically.
+Ordinary Explorer double-click and text-based extensions cannot read vault contents in protected mode. Use the dedicated view or context command.
+The protected editor has a plain textarea with native text undo; it does not provide language servers, notebooks, syntax highlighting, whole-vault search, import, or plaintext export.
+BOMs and line endings are preserved when loading/saving the document model; browser textarea input normalizes CRLF to LF when the user edits.
+Save and close protected documents before renaming/deleting them or their parent folders.
 
-## Commands and session state
+Adding the first workspace folder can restart the extension host. Run **Open Vault** again after the restart. Passwords and keys are never restored automatically.
+If a restored editor reports a locked vault, unlock it first, then retry opening the editor. Existing encrypted backup IDs require the same vault and document path. A stale restored draft cannot overwrite a more recently saved file; preserve the draft in memory before using Revert.
+
+## Commands and locking
 
 | Command | Behavior |
 | --- | --- |
-| Create Vault | Create a new encrypted directory; existing directories are refused |
-| Open Vault | Unlock a restored vault folder, or choose an existing vault |
-| Open Another Vault | Browse for an additional vault even when a locked folder is present |
-| Lock Vault | Select an open vault; save and close its editors before releasing keys |
-| Lock All Vaults | Lock open vaults in order; stop if saving fails or locking is cancelled |
-| Change Vault Passwords | Reauthenticate both current passwords and confirm a new pair |
-| Forget Vault Location | Lock the vault if open, then delete its remembered physical location |
+| Create Vault | Create a new vault; existing directories are refused |
+| Open Vault / Open Another Vault | Authenticate an existing/restored vault or browse for another |
+| Open in Protected Editor | Open a vault text file without a standard TextDocument |
+| Lock Vault / Lock All Vaults | Save and close editors, revoke access, then release Rust keys |
+| Change Vault Passwords | Require both current passwords and confirm a new pair |
+| Forget Vault Location | Lock, then remove the remembered physical location |
 
-The status bar shows open and locked counts. Click it to lock an open vault or open a locked one.
-Multiple vaults use their directory names and physical paths in selection lists. Physical location metadata is not secret.
-A restored folder is authenticated against its expected vault ID; a different vault substituted at that path is refused.
+The status bar shows open/locked counts. A cancelled lock, failed save, or cancelled close leaves the session open.
+Saving checks the file's immutable object revision. A conflict or edits arriving during a save leave the document dirty.
 
-A cancelled lock, failed save, or cancelled editor close keeps the vault open. Hidden dirty notebook documents are included in the save check.
-Locking revokes the provider before releasing the core session; an in-flight read cannot return its result after that revocation.
-The locked workspace URI remains so the host need not restart again.
+Removing a workspace folder, changing access mode, or losing the core connection revokes access and closes protected panels, releasing their content references. **Changes since the last completed encrypted backup can be lost during an unexpected disconnect.** Encrypted orphan drafts may remain; automatic draft enumeration/recovery and garbage collection are not implemented.
+Normal locking saves before closing. Locking is not secure erasure of renderer/JavaScript/OS memory.
 
-Changing passwords does not re-encrypt file contents. **Old snapshots still work with their older passwords.**
-No recovery key exists. Use distinct, strong passwords and retain independent encrypted backups.
+Changing passwords rewraps the same master key. Old vault snapshots still work with their old passwords; neither current file data nor encrypted drafts are re-encrypted.
+Losing either password prevents recovery. Keep independent encrypted backups.
 
-Removing a vault workspace folder disconnects its session. A core failure, timeout, malformed response, or unsafe history-setting change also invalidates access.
-Unexpected disconnects are reported, and editor buffers may remain so they can be saved after reauthentication. Emergency disconnects do not discard unsaved content or claim to erase all plaintext.
+## Settings and compatibility
 
-## Settings and trust
+`venc.corePath` is a machine setting: an empty value uses bundled `bin/venc` (`bin/venc.exe` on Windows). A custom value must be an absolute path to a trusted executable on the workspace host.
+The protocol and protected-editor capability are checked before requesting passwords.
+SSH/WSL/container vault paths and executables belong to that host. Browser-only VS Code is unsupported. Workspace Trust is required.
 
-`venc.corePath` is a machine setting. An empty value uses the bundled `bin/venc` (`bin/venc.exe` on Windows).
-The extension requires a trusted workspace and runs on the workspace host. In SSH/WSL/containers, the executable and vault paths refer to that host.
-Browser-only VS Code is unsupported. A native executable must match the host OS/CPU and runtime requirements.
-The core must implement the initial protocol handshake. Incompatible binaries are refused before asking for passwords. Cores that omit the password-change capability are refused for that command.
+`venc.allowPlaintextAccess` defaults to `false`. Enabling it explicitly permits the standard FileSystemProvider to return plaintext for native editors and other extensions. **Compatibility mode can write plaintext crash backups even with Hot Exit disabled**, as reproduced in VS Code 1.95.3.
+Compatibility opening requires acknowledging that risk, `files.hotExit: "off"`, and `workbench.localHistory.enabled: false`. Consent to change these user settings affects other files and is not automatically reverted. Workspace overrides must also match.
+Protected mode does not change these global settings. Changing access mode locks all vaults; save first. Unsafe history settings disconnect compatibility sessions.
 
-The opening flow checks `files.hotExit: "off"` and `workbench.localHistory.enabled: false`.
-Approving the setting change affects **other files in your user profile** and is not automatically reverted.
-Workspace overrides must also meet these settings. A later unsafe change disconnects the vault.
-The extension remembers only vault IDs and physical directory paths in local extension state. **Forget Vault Location** removes that mapping, leaves the workspace URI, and does not delete the encrypted vault.
-
-## Plaintext storage limits
-
-In a normal VS Code 1.95.3 profile, an unsaved virtual text document is backed up in plaintext even with Hot Exit off.
-The settings above reduce persistence paths but do not prevent all backups or remove older copies.
-
-For a strict no-plaintext-on-disk requirement, separately configure and validate an isolated environment whose VS Code user data, workspace state, and backup locations use appropriate memory-backed storage.
-venc does not configure or verify that environment. RAM storage alone does not address swap, hibernation, crash dumps, or other processes.
-A custom editor with encrypted backup handling is a separate future design; it is not implemented.
-
-Other extensions, language servers, editor search, clipboard operations, Save As, and OS facilities may access plaintext.
-Lock closes recognized standard vault tabs and releases Rust keys; it does not securely erase VS Code memory, third-party copies, or existing backups.
-Do not add untrusted vault configuration to a trusted workspace or assume encrypted content is safe to execute.
-See [the security model](../SECURITY.md) for remaining work.
+Vault IDs, physical locations, document paths/URIs, and opaque backup references may appear in VS Code profile metadata. File-name confidentiality applies to vault metadata, not the editor's recent-file/workspace records.
+Neither mode deletes previous plaintext backups or exports. Upgrading from 0.2.x does not erase copies made by its native editor.
+Do not trust or execute vault configuration merely because its contents were encrypted. See [the security model](../SECURITY.md).
 
 ## Develop, test, and package
 
@@ -82,23 +69,13 @@ npm ci --ignore-scripts
 npm test
 npm run test:integration
 npm run test:backups
-```
-
-Provider tests run real Rust processes and cover filesystem contracts, authentication, password changes, lock cancellation, dirty notebooks, queue limits, malformed responses, and revocation races.
-`test:integration` pins VS Code 1.95.3 and exercises real document editing and saving in an isolated development profile.
-`test:backups` runs a disposable normal installed-extension profile to check actual disk backup behavior; development profiles can omit that backup location.
-Linux editor tests need a display/Xvfb and Electron libraries. Set `VENC_TEST_CORE` to select another core binary.
-
-Open this directory in VS Code, set `venc.corePath`, and press F5 to launch the development host.
-Create a host-specific distributable with:
-
-```sh
 npm run package
 ```
 
-The script builds the core for the current host, copies the new binary to `bin/`, and packages compiled extension code and both README languages.
-Cross-platform `--target` values are refused; build on a matching host. Dynamic/Nix runtime dependencies must be validated on the target machine.
-For Linux builds with static libraries available, `RUSTFLAGS="-C target-feature=+crt-static" npm run package` can produce a static core.
-The provided Linux x64 VSIX was verified locally. macOS and Windows packages are not yet locally verified.
+Tests use real Rust processes. The normal-profile backup probe waits for VS Code's actual custom working-copy backup callback, decrypts the draft, checks for document plaintext in the vault and profile, and reproduces the native editor's unsafe backup as a control.
+A development/test profile alone cannot establish backup behavior. Linux editor tests need a display/Xvfb and Electron libraries. `VENC_TEST_CORE` selects another binary.
 
-Source references: [VS Code FileSystemProvider](https://code.visualstudio.com/api/references/vscode-api#FileSystemProvider), [VS Code backup tracker](https://github.com/microsoft/vscode/blob/1.95.3/src/vs/workbench/services/workingCopy/common/workingCopyBackupTracker.ts).
+The packaging script builds the current-host core, atomically stages it in `bin/`, and packages compiled code with both README languages and the security model. Build other OS/CPU packages on their matching hosts and verify runtime dependencies.
+Linux static builds require static libraries and `RUSTFLAGS="-C target-feature=+crt-static"`. Local validation is Linux x64; other platforms and an independent security audit remain pending.
+
+References: [VS Code custom editors](https://code.visualstudio.com/api/extension-guides/custom-editors), [CustomEditorProvider API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider).
