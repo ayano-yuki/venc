@@ -45,7 +45,9 @@ fn flag(params: &Value, key: &str) -> Result<bool> {
 fn dispatch(request: &Request, session: &mut Option<Session>) -> Result<Value> {
     let p = &request.params;
     match request.method.as_str() {
-        "hello" => return Ok(json!({"protocol":1,"capabilities":["changePasswords"]})),
+        "hello" => {
+            return Ok(json!({"protocol":1,"capabilities":["changePasswords","protectedEditor"]}))
+        }
         "init" | "unlock" => {
             ensure!(session.is_none(), "session is already open");
             let path = Path::new(text(p, "vault")?);
@@ -56,7 +58,7 @@ fn dispatch(request: &Request, session: &mut Option<Session>) -> Result<Value> {
             } else {
                 Session::unlock(path, a, b)?
             };
-            let result = json!({ "vaultId": opened.vault_id(), "protocol": 1, "capabilities": ["changePasswords"] });
+            let result = json!({ "vaultId": opened.vault_id(), "protocol": 1, "capabilities": ["changePasswords","protectedEditor"] });
             *session = Some(opened);
             return Ok(result);
         }
@@ -82,6 +84,31 @@ fn dispatch(request: &Request, session: &mut Option<Session>) -> Result<Value> {
         "readFile" => {
             let plain = s.read_file(text(p, "path")?)?;
             json!({ "data": STANDARD.encode(&*plain) })
+        }
+        "readDocument" | "readBackup" => {
+            let snapshot = if request.method == "readDocument" {
+                s.read_document(text(p, "path")?)?
+            } else {
+                s.read_backup(text(p, "backup")?, text(p, "path")?)?
+            };
+            json!({"data": STANDARD.encode(&*snapshot.data), "revision": snapshot.revision})
+        }
+        "writeDocument" | "createBackup" => {
+            let encoded = text(p, "data")?;
+            ensure!(
+                encoded.len() <= MAX_FILE_SIZE.div_ceil(3) * 4,
+                "file exceeds size limit"
+            );
+            let plain = Zeroizing::new(STANDARD.decode(encoded)?);
+            if request.method == "writeDocument" {
+                json!({"revision": s.write_document(text(p, "path")?, text(p, "revision")?, &plain)?})
+            } else {
+                json!({"backup": s.create_backup(text(p, "path")?, text(p, "revision")?, &plain)?})
+            }
+        }
+        "deleteBackup" => {
+            s.delete_backup(text(p, "backup")?)?;
+            Value::Null
         }
         "writeFile" => {
             let encoded = text(p, "data")?;
