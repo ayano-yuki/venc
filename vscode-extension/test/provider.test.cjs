@@ -25,7 +25,7 @@ class FileSystemError extends Error {
 for (const code of ['Unavailable', 'NoPermissions', 'FileNotFound', 'FileExists', 'FileNotADirectory', 'FileIsADirectory']) {
     FileSystemError[code] = message => new FileSystemError(code, message);
 }
-const mock = { __esModule: true, Uri, Disposable, EventEmitter: Emitter, FileSystemError, FileType: { File: 1, Directory: 2 }, FileChangeType: { Changed: 1, Created: 2, Deleted: 3 } };
+const mock = { __esModule: true, TreeItem: class { constructor(label, collapsibleState) { Object.assign(this, { label, collapsibleState }); } }, ThemeIcon: class { constructor(id) { this.id = id; } }, TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, Uri, Disposable, EventEmitter: Emitter, FileSystemError, FileType: { File: 1, Directory: 2 }, FileChangeType: { Changed: 1, Created: 2, Deleted: 3 } };
 const load = Module._load;
 Module._load = function (id, ...args) { return id === 'vscode' ? mock : load.call(this, id, ...args); };
 const { VaultProvider } = require('../dist/vaultProvider');
@@ -105,6 +105,8 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     const errors = [];
     let registered;
     let registeredProtected;
+    let treeProvider;
+    const executed = [];
     let compatibility = true;
     let closeAllowed = true;
     let saveAllowed = false;
@@ -141,7 +143,7 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
             showOpenDialog: async () => [{ fsPath: temp, scheme: 'file' }],
             createStatusBarItem: () => status,
             registerCustomEditorProvider: (_name, value) => { registeredProtected = value; return new Disposable(() => {}); },
-            createTreeView: () => new Disposable(() => {}),
+            createTreeView: (_id, options) => { treeProvider = options.treeDataProvider; return new Disposable(() => {}); },
             showInformationMessage: async message => { notices.push(message); },
             showWarningMessage: async message => message.startsWith('The standard') ? 'Continue' : choice,
             showErrorMessage: async message => { errors.push(message); },
@@ -150,7 +152,7 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
         },
         commands: {
             registerCommand(name, fn) { handlers.set(name, fn); return new Disposable(() => {}); },
-            executeCommand: async () => {},
+            executeCommand: async (...args) => { executed.push(args); },
         }
     });
     Module._load = function (id, ...args) { return id === 'vscode' ? mock : load.call(this, id, ...args); };
@@ -164,6 +166,10 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     await handlers.get('venc.createVault')();
     assert.deepEqual(errors, []);
     const root = folders[1].uri;
+    assert(executed.some(args => args[0] === 'workbench.view.extension.venc'));
+    const initialRoots = await treeProvider.getChildren();
+    assert.equal(initialRoots.length, 1);
+    assert.equal(treeProvider.getTreeItem(initialRoots[0]).contextValue, 'vencUnlockedVault');
     const file = root.with({ path: '/doc.txt' });
     await registered.writeFile(file, Buffer.from('before'), { create: true, overwrite: false });
     const document = { uri: file, isDirty: true, save: async () => {
@@ -193,8 +199,18 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     assert(!JSON.stringify(state).includes('alpha'));
     assert(!JSON.stringify(state).includes('beta'));
     assert(status.text.includes('0 open'));
+    const lockedRoot = (await treeProvider.getChildren())[0];
+    const lockedItem = treeProvider.getTreeItem(lockedRoot);
+    assert.equal(lockedItem.contextValue, 'vencLockedVault');
+    assert.equal(lockedItem.command.command, 'venc.unlockVault');
+    const readDirectory = registered.readDirectory.bind(registered);
+    let lockedReads = 0;
+    registered.readDirectory = (...args) => { lockedReads++; return readDirectory(...args); };
+    assert.deepEqual(await treeProvider.getChildren(lockedRoot), []);
+    assert.equal(lockedReads, 0, 'Locked sidebar never requests decrypted file metadata');
+    registered.readDirectory = readDirectory;
     inputs.push('alpha', 'beta');
-    await handlers.get('venc.openVault')();
+    await handlers.get(lockedItem.command.command)(...lockedItem.command.arguments);
     assert.equal((await registered.stat(file)).size, 5);
     assert(status.text.includes('1 open'));
     // Confirmation cancellation releases references and leaves credentials unchanged.
@@ -228,6 +244,7 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     await assert.rejects(registered.stat(file), { code: 'Unavailable' });
     await handlers.get('venc.forgetVault')();
     assert.deepEqual(state.vaultLocations, {});
+    assert.deepEqual(await treeProvider.getChildren(), []);
     if (process.platform !== 'win32') {
         const incompatible = path.join(temp, 'old-core');
         await fs.writeFile(incompatible, '#!/bin/sh\nread -r line\nprintf \'{"id":1,"result":{"protocol":99},"locked":true}\\n\'\n', { mode: 0o700 });
@@ -262,11 +279,15 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
         }
     };
     choice = 'Save and Lock';
-    await handlers.get('venc.lockVault')();
+    await handlers.get('venc.lockSelectedVault')({ uri: protectedRoot });
     assert.equal(errors.length, errorsBefore, JSON.stringify(errors));
     assert.equal(custom.active, false);
     assert.equal(custom.text, '');
     await assert.rejects(registered.stat(protectedUri), { code: 'Unavailable' });
+    assert.equal(treeProvider.getTreeItem((await treeProvider.getChildren())[0]).contextValue, 'vencLockedVault');
+    inputs.push('keep-secret-a', 'keep-secret-b');
+    await handlers.get('venc.unlockVault')(protectedUri);
+    assert.deepEqual(inputs, ['keep-secret-a', 'keep-secret-b'], 'Non-root sidebar targets are rejected before prompting');
 
 
 

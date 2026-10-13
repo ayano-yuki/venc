@@ -1,8 +1,8 @@
 {
   "name": "venc",
-  "displayName": "venc \u2014 Vault ENCrypt",
+  "displayName": "venc — Vault ENCrypt",
   "description": "Edit two-password encrypted vaults with a protected editor, encrypted crash drafts, and a virtual filesystem.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "ayano-yuki",
   "license": "MIT",
   "engines": {
@@ -28,7 +28,8 @@
     "commands": [
       {
         "command": "venc.createVault",
-        "title": "venc: Create Vault"
+        "title": "venc: Create Vault",
+        "icon": "$(new-folder)"
       },
       {
         "command": "venc.openVault",
@@ -40,12 +41,14 @@
       },
       {
         "command": "venc.openAnotherVault",
-        "title": "venc: Open Another Vault"
+        "title": "venc: Open Another Vault",
+        "icon": "$(folder-opened)"
       },
       {
         "command": "venc.lockAllVaults",
         "title": "venc: Lock All Vaults",
-        "enablement": "venc.hasUnlockedVault"
+        "enablement": "venc.hasUnlockedVault",
+        "icon": "$(lock)"
       },
       {
         "command": "venc.changePasswords",
@@ -59,6 +62,21 @@
       {
         "command": "venc.openProtectedFile",
         "title": "venc: Open in Protected Editor"
+      },
+      {
+        "command": "venc.unlockVault",
+        "title": "venc: Unlock Selected Vault",
+        "icon": "$(unlock)"
+      },
+      {
+        "command": "venc.lockSelectedVault",
+        "title": "venc: Lock Selected Vault",
+        "icon": "$(lock)"
+      },
+      {
+        "command": "venc.refreshVaults",
+        "title": "venc: Refresh Vaults",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -91,10 +109,11 @@
       }
     ],
     "views": {
-      "explorer": [
+      "venc": [
         {
           "id": "venc.protectedFiles",
-          "name": "venc: Protected Files"
+          "name": "Protected Files",
+          "contextualTitle": "venc"
         }
       ]
     },
@@ -105,8 +124,67 @@
           "when": "resourceScheme == venc && !explorerResourceIsFolder",
           "group": "navigation"
         }
+      ],
+      "view/title": [
+        {
+          "command": "venc.createVault",
+          "when": "view == venc.protectedFiles",
+          "group": "navigation@1"
+        },
+        {
+          "command": "venc.openAnotherVault",
+          "when": "view == venc.protectedFiles",
+          "group": "navigation@2"
+        },
+        {
+          "command": "venc.lockAllVaults",
+          "when": "view == venc.protectedFiles && venc.hasUnlockedVault",
+          "group": "navigation@3"
+        },
+        {
+          "command": "venc.refreshVaults",
+          "when": "view == venc.protectedFiles",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "venc.unlockVault",
+          "when": "view == venc.protectedFiles && viewItem == vencLockedVault",
+          "group": "inline"
+        },
+        {
+          "command": "venc.lockSelectedVault",
+          "when": "view == venc.protectedFiles && viewItem == vencUnlockedVault",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "venc.unlockVault",
+          "when": "false"
+        },
+        {
+          "command": "venc.lockSelectedVault",
+          "when": "false"
+        }
       ]
-    }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "venc",
+          "title": "venc",
+          "icon": "media/vault.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "venc.protectedFiles",
+        "contents": "Create a vault or open an existing one to edit encrypted files.\n[Create Vault](command:venc.createVault)\n[Open Vault](command:venc.openAnotherVault)"
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p .",

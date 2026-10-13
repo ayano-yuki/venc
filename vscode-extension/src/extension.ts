@@ -6,7 +6,7 @@ import { constants } from 'node:fs';
 import { CoreClient } from './coreClient';
 import { VaultProvider, SCHEME } from './vaultProvider';
 import { ProtectedEditor, PROTECTED_EDITOR } from './protectedEditor';
-import { ProtectedFiles } from './protectedFiles';
+import { ProtectedFiles, VaultRoot } from './protectedFiles';
 
 interface Mount { client: CoreClient; root: vscode.Uri; name: string; capabilities: string[] }
 interface Opened { vaultId: string; protocol: number; capabilities?: string[] }
@@ -15,6 +15,7 @@ let provider: VaultProvider;
 let status: vscode.StatusBarItem;
 let protectedEditor: ProtectedEditor;
 let protectedFiles: ProtectedFiles;
+let vaultRoots: () => VaultRoot[] = () => [];
 let plaintextAccess = false;
 let busy = false;
 
@@ -37,8 +38,27 @@ function locations(context: vscode.ExtensionContext): Record<string, string> {
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) { return {}; }
     return Object.fromEntries(Object.entries(saved).filter(([id, value]) => /^[a-f0-9]{32}$/.test(id) && typeof value === 'string' && path.isAbsolute(value)));
 }
+function sidebarRoots(context: vscode.ExtensionContext): VaultRoot[] {
+    const roots = new Map<string, VaultRoot>();
+    for (const [authority, location] of Object.entries(locations(context))) {
+        roots.set(authority, { uri: vscode.Uri.from({ scheme: SCHEME, authority, path: '/' }), name: path.basename(location), locked: true });
+    }
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        if (folder.uri.scheme === SCHEME && /^[a-f0-9]{32}$/.test(folder.uri.authority)) {
+            roots.set(folder.uri.authority, { uri: folder.uri.with({ path: '/', query: '', fragment: '' }), name: folder.name.replace(/^venc: /, ''), locked: true });
+        }
+    }
+    for (const [authority, mount] of mounts) { roots.set(authority, { uri: mount.root, name: mount.name, locked: false }); }
+    return [...roots.values()];
+}
+function selectedVault(value: unknown): vscode.Uri {
+    const uri = value instanceof vscode.Uri ? value : value && typeof value === 'object' && 'uri' in value ? value.uri : undefined;
+    if (!(uri instanceof vscode.Uri) || uri.scheme !== SCHEME || !/^[a-f0-9]{32}$/.test(uri.authority)
+        || uri.path !== '/' || uri.query || uri.fragment) { throw new Error('Choose a vault in the venc sidebar.'); }
+    return uri;
+}
 function updateStatus(): void {
-    const locked = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === SCHEME && !mounts.has(folder.uri.authority)).length ?? 0;
+    const locked = vaultRoots().filter(root => root.locked).length;
     status.text = busy ? '$(sync~spin) venc' : `$(lock) venc: ${mounts.size} open${locked ? ` / ${locked} locked` : ''}`;
     status.tooltip = busy ? 'Vault operation in progress' : 'Manage encrypted vaults. Use Protected Files to edit with encrypted backups.';
     protectedFiles?.refresh();
@@ -163,7 +183,7 @@ async function open(context: vscode.ExtensionContext, create: boolean, knownPath
             }
         }
         updateStatus();
-        await vscode.commands.executeCommand('workbench.view.explorer');
+        await vscode.commands.executeCommand('workbench.view.extension.venc');
     } finally { if (secret) { release(secret); } client?.dispose(); }
 }
 async function lock(authority: string): Promise<boolean> {
@@ -203,7 +223,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     provider = new VaultProvider(SCHEME, () => plaintextAccess);
     protectedEditor = new ProtectedEditor(provider);
     provider.guardMutation = uri => protectedEditor.guardMutation(uri);
-    protectedFiles = new ProtectedFiles(provider, () => [...mounts.values()].map(m => ({ uri: m.root, name: m.name })));
+    vaultRoots = () => sidebarRoots(context);
+    protectedFiles = new ProtectedFiles(provider, vaultRoots);
     context.subscriptions.push(protectedEditor, protectedFiles,
         vscode.window.registerCustomEditorProvider(PROTECTED_EDITOR, protectedEditor, { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } }),
         vscode.window.createTreeView('venc.protectedFiles', { treeDataProvider: protectedFiles }),
@@ -216,13 +237,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
     status.name = 'venc Vaults';
     context.subscriptions.push(status, provider, vscode.workspace.registerFileSystemProvider(SCHEME, provider, { isCaseSensitive: true, isReadonly: false }));
-    const command = (name: string, action: () => Promise<unknown>) => context.subscriptions.push(vscode.commands.registerCommand(name, async () => {
+    const command = (name: string, action: (value?: unknown) => Promise<unknown>) => context.subscriptions.push(vscode.commands.registerCommand(name, async (value?: unknown) => {
         if (busy) { void vscode.window.showInformationMessage('Finish or cancel the current vault operation before starting another.'); return; }
         busy = true; updateStatus();
-        try { await action(); } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Vault operation failed.'); }
+        try { await action(value); } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Vault operation failed.'); }
         finally { busy = false; updateStatus(); }
     }));
     command('venc.createVault', () => open(context, true));
+    command('venc.unlockVault', async value => {
+        const uri = selectedVault(value);
+        if (mounts.has(uri.authority)) { return; }
+        const location = locations(context)[uri.authority];
+        if (!location) { throw new Error('This vault location is not remembered. Use venc: Open Another Vault to locate it.'); }
+        await open(context, false, location, uri.authority);
+    });
+    command('venc.lockSelectedVault', async value => { await lock(selectedVault(value).authority); });
+    context.subscriptions.push(vscode.commands.registerCommand('venc.refreshVaults', () => protectedFiles.refresh()));
     command('venc.openAnotherVault', () => open(context, false));
     command('venc.openVault', async () => {
         const saved = locations(context);

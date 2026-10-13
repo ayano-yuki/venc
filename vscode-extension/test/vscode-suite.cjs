@@ -70,13 +70,21 @@ exports.run = async () => {
             provider.dispose();
             const extension = vscode.extensions.getExtension('ayano-yuki.venc');
             assert(extension, 'Development extension is discoverable');
-            await extension.activate();
+            const manifest = extension.packageJSON.contributes;
+            assert(manifest.viewsContainers.activitybar.some(c => c.id === 'venc' && c.icon === 'media/vault.svg'));
+            assert(manifest.views.venc.some(v => v.id === 'venc.protectedFiles'));
+            await vscode.commands.executeCommand('workbench.view.extension.venc');
+            await vscode.commands.executeCommand('venc.protectedFiles.focus');
+            const deadline = Date.now() + 5000;
+            while (!extension.isActive && Date.now() < deadline) { await new Promise(resolve => setTimeout(resolve, 50)); }
+            assert(extension.isActive, 'Opening the sidebar activates the actual extension');
             const commands = await vscode.commands.getCommands(true);
-            for (const name of ['venc.openVault', 'venc.openAnotherVault', 'venc.lockAllVaults', 'venc.changePasswords', 'venc.forgetVault']) {
+            for (const name of ['venc.openVault', 'venc.openAnotherVault', 'venc.lockAllVaults', 'venc.changePasswords', 'venc.forgetVault', 'venc.unlockVault', 'venc.lockSelectedVault', 'venc.refreshVaults']) {
                 assert(commands.includes(name), `${name} registered by the actual extension`);
             }
+            await vscode.commands.executeCommand('venc.refreshVaults');
             await vscode.commands.executeCommand('venc.lockAllVaults');
-            console.log('Actual extension activation, status bar, and command registration passed');
+            console.log('Actual activity-bar container, sidebar activation/focus, status bar, and vault command registration passed');
         }
 
     } finally {
