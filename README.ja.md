@@ -11,8 +11,9 @@ Vault を `venc://` の仮想ワークスペースとして開き、VS Code で�
 ## VS Code 拡張
 
 「Extensions: Install from VSIX...」で VSIX をインストールし、`venc: Create Vault` または `venc: Open Vault` を実行します。
+アクティビティバーの **venc の金庫アイコン**を押すと、Vault の作成・解除・ファイル一覧・ロックを操作する専用サイドバーが開きます。
 二つのパスワードを入力すると、Vault 名付きの仮想フォルダが Explorer に追加されます。
-Explorer でフォルダと空ファイルを作り、**venc: Protected Files** または右クリックの **venc: Open in Protected Editor** で編集します。名前変更・削除は先に保存してエディタを閉じます。
+Explorer でフォルダと空ファイルを作り、venc サイドバーの **Protected Files** または右クリックの **venc: Open in Protected Editor** で編集します。名前変更・削除は先に保存してエディタを閉じます。
 
 ステータスバーに開いている Vault とロック中の Vault の数を表示します。
 `Open Another Vault`、`Lock Vault`、`Lock All Vaults`、`Change Vault Passwords`、`Forget Vault Location` も利用できます。
@@ -139,7 +140,7 @@ API 参考: [RustCrypto Argon2](https://docs.rs/argon2/0.5.3/argon2/)、[RustCry
 
 ## 保護エディタ（0.3.0）
 
-Explorer でフォルダと空ファイルを作成し、**venc: Protected Files** または右クリックの **venc: Open in Protected Editor** から開いてください。
+Explorer でフォルダと空ファイルを作成し、venc サイドバーの **Protected Files** または右クリックの **venc: Open in Protected Editor** から開いてください。
 標準のダブルクリックで平文を読むことは既定で拒否します。対象は 16 MiB 以下の UTF-8 テキストです。保存は Ctrl/Cmd+S。名前変更・削除は先に文書を保存して閉じます。
 下書きは専用 HKDF ドメインと AEAD で暗号化し、Vault・下書き ID・文書パス・元の版を認証します。保存時の版照合で、古い下書きによる最新ファイルの上書きを防ぎます。
 予期しない切断は保護パネルを閉じるため、最後の暗号化バックアップ以降の変更を失う場合があります。孤立した暗号化下書きの自動一覧・復旧・整理は未実装です。

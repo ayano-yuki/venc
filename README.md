@@ -11,8 +11,8 @@ Both passwords are needed to recover the vault master key. This is **not two-fac
 ## VS Code extension
 
 Install a VSIX using **Extensions: Install from VSIX...**, then run **venc: Create Vault** or **venc: Open Vault**.
-The extension asks for both passwords and adds a named virtual workspace folder to Explorer.
-Create folders and empty files in Explorer, then open files from **venc: Protected Files** or **venc: Open in Protected Editor**. Save with Ctrl/Cmd+S; close documents before renaming/deleting them or their parent folders. UTF-8 text only, at most 16 MiB; language servers and notebooks require unsafe compatibility access.
+Click the **venc vault icon** in the Activity Bar to open its sidebar, create/open vaults, browse files, and lock or unlock individual vaults. The extension asks for both passwords and adds a named virtual workspace folder to Explorer.
+Create folders and empty files in Explorer, then open files from **Protected Files** in the venc sidebar or **venc: Open in Protected Editor**. Save with Ctrl/Cmd+S; close documents before renaming/deleting them or their parent folders. UTF-8 text only, at most 16 MiB; language servers and notebooks require unsafe compatibility access.
 
 The status bar shows open and locked vault counts. Commands also include **Open Another Vault**, **Lock Vault**, **Lock All Vaults**, **Change Vault Passwords**, and **Forget Vault Location**.
 A cancelled lock or failed save leaves the vault open. Removing its workspace folder releases the core session.

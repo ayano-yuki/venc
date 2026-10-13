@@ -11,9 +11,9 @@ Rust が認証、保存時の暗号化、未保存の下書きの暗号化を担
 ## 導入と編集
 
 1. VS Code デスクトップ版 1.95 以上で「Extensions: Install from VSIX...」からホストに対応する VSIX をインストールします。
-2. `venc: Create Vault` で親ディレクトリと新規名を選ぶか、`venc: Open Vault` で既存 Vault を選びます。
+2. アクティビティバーの **venc の金庫アイコン**をクリックして専用サイドバーを開きます。初期画面の **Create Vault** / **Open Vault** または上部のボタンから Vault を選びます。
 3. 二つのパスワードを入力すると、`venc: Vault名` のワークスペースフォルダが追加されます。
-4. Explorer でフォルダと空ファイルを作り、**venc: Protected Files** ビューから開きます。Vault ファイルの右クリック → **venc: Open in Protected Editor** でも開けます。
+4. Explorer でフォルダと空ファイルを作り、venc サイドバーの **Protected Files** から開きます。Vault ファイルの右クリック → **venc: Open in Protected Editor** でも開けます。
 5. UTF-8 テキストを編集し、Ctrl/Cmd+S で保存します。上限はファイルごとに 16 MiB。不正な UTF-8 とバイナリは、内容を変更せず拒否します。
 
 保護モードでは、通常のダブルクリックやテキストを読む拡張から Vault の内容を取得できません。専用ビューか右クリックを使ってください。
@@ -24,6 +24,15 @@ Rust が認証、保存時の暗号化、未保存の下書きの暗号化を担
 最初のフォルダ追加時に拡張ホストが再起動する場合があります。再度 `Open Vault` で認証してください。パスワードと鍵は自動復元しません。
 復元エディタがロックエラーになったら、先に Vault を解除してから開き直してください。バックアップ ID は同じ Vault・文書パスでのみ復元できます。
 古い下書きが新しい保存済み文書を上書きすることは拒否します。Revert する前に必要な下書きをメモリ上で確保してください。
+
+## アクティビティバーとサイドバー
+
+金庫アイコンを押すと専用の **venc** サイドバーを開きます。**Protected Files** に、記憶した Vault と現在の Vault ワークスペースフォルダを Locked / Unlocked の状態付きで表示します。
+ロック中の Vault をクリックすると二つのパスワードを求めます。解除中の Vault は展開してフォルダをたどり、ファイルを保護エディタで開けます。
+ロック中はファイルツリーを表示せず、復号したディレクトリ情報の取得も行いません。
+
+上部には新規 Vault、別の Vault を開く、すべてロック、更新のボタンがあります。各 Vault の行にもロック・解除の操作を用意します。
+ファイル・フォルダの作成、名前変更、削除は通常のワークスペース Explorer から行えます。ステータスバーの数はサイドバーと同じ Vault を対象にします。
 
 ## コマンドとロック
 
@@ -84,4 +93,4 @@ npm run package
 他の OS・CPU は対応するホストで作成し、実行時のライブラリも確認してください。
 Linux 静的ビルドは静的ライブラリと `RUSTFLAGS="-C target-feature=+crt-static"` が必要です。ローカル検証は Linux x64 で、他環境と独立したセキュリティ監査は未完了です。
 
-参考: [VS Code カスタムエディタ](https://code.visualstudio.com/api/extension-guides/custom-editors)、[CustomEditorProvider API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider)。
+参考: [Tree View とアクティビティバー](https://code.visualstudio.com/api/extension-guides/tree-view)、[VS Code カスタムエディタ](https://code.visualstudio.com/api/extension-guides/custom-editors)、[CustomEditorProvider API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider)。

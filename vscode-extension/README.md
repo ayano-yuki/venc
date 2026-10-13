@@ -11,9 +11,9 @@ This closes the standard editor's plaintext backup path. It does not isolate pla
 ## Install and edit
 
 1. Install a host-specific VSIX using **Extensions: Install from VSIX...** in desktop VS Code 1.95+.
-2. Run **venc: Create Vault** to choose a parent and a new name, or **venc: Open Vault** for an existing vault.
+2. Click the **venc vault icon** in the Activity Bar to open its sidebar. Use **Create Vault** or **Open Vault** in the welcome view, or the toolbar buttons, to choose a vault.
 3. Enter both passwords. A **venc: your-vault-name** workspace folder appears.
-4. Create folders and empty files in Explorer. Open files from **venc: Protected Files**, or right-click a vault file and choose **venc: Open in Protected Editor**.
+4. Create folders and empty files in Explorer. Open files from **Protected Files** in the venc sidebar, or right-click a vault file and choose **venc: Open in Protected Editor**.
 5. Edit UTF-8 text and press Ctrl/Cmd+S. Each file is limited to 16 MiB. Binary files and malformed UTF-8 are refused without changing the file.
 
 Ordinary Explorer double-click and text-based extensions cannot read vault contents in protected mode. Use the dedicated view or context command.
@@ -23,6 +23,15 @@ Save and close protected documents before renaming/deleting them or their parent
 
 Adding the first workspace folder can restart the extension host. Run **Open Vault** again after the restart. Passwords and keys are never restored automatically.
 If a restored editor reports a locked vault, unlock it first, then retry opening the editor. Existing encrypted backup IDs require the same vault and document path. A stale restored draft cannot overwrite a more recently saved file; preserve the draft in memory before using Revert.
+
+## Activity Bar and sidebar
+
+The vault icon opens a dedicated **venc** sidebar. **Protected Files** lists remembered vaults and current vault workspace folders, with Locked/Unlocked status.
+Click a locked vault to enter both passwords; expand an unlocked vault to browse folders and open files in the protected editor.
+Locked vaults do not expose their file tree or request decrypted directory metadata.
+
+The toolbar provides Create Vault, Open Another Vault, Lock All Vaults, and Refresh. Each unlocked vault has its own lock action, and each locked vault has an unlock action.
+File/folder creation and rename/delete remain available in the regular workspace Explorer. The status bar counts the same open/locked vaults as the sidebar.
 
 ## Commands and locking
 
@@ -78,4 +87,4 @@ A development/test profile alone cannot establish backup behavior. Linux editor 
 The packaging script builds the current-host core, atomically stages it in `bin/`, and packages compiled code with both README languages and the security model. Build other OS/CPU packages on their matching hosts and verify runtime dependencies.
 Linux static builds require static libraries and `RUSTFLAGS="-C target-feature=+crt-static"`. Local validation is Linux x64; other platforms and an independent security audit remain pending.
 
-References: [VS Code custom editors](https://code.visualstudio.com/api/extension-guides/custom-editors), [CustomEditorProvider API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider).
+References: [VS Code Tree View and Activity Bar containers](https://code.visualstudio.com/api/extension-guides/tree-view), [VS Code custom editors](https://code.visualstudio.com/api/extension-guides/custom-editors), [CustomEditorProvider API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider).
