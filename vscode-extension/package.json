@@ -1,8 +1,8 @@
 {
   "name": "venc",
-  "displayName": "venc — Vault ENCrypt",
-  "description": "Edit two-password encrypted vaults with a virtual filesystem and explicit session controls.",
-  "version": "0.2.0",
+  "displayName": "venc \u2014 Vault ENCrypt",
+  "description": "Edit two-password encrypted vaults with a protected editor, encrypted crash drafts, and a virtual filesystem.",
+  "version": "0.3.0",
   "publisher": "ayano-yuki",
   "license": "MIT",
   "engines": {
@@ -55,6 +55,10 @@
       {
         "command": "venc.forgetVault",
         "title": "venc: Forget Vault Location"
+      },
+      {
+        "command": "venc.openProtectedFile",
+        "title": "venc: Open in Protected Editor"
       }
     ],
     "configuration": {
@@ -65,8 +69,43 @@
           "default": "",
           "scope": "machine",
           "description": "Absolute path to the trusted venc executable on the extension host. Otherwise use the bundled bin/venc executable."
+        },
+        "venc.allowPlaintextAccess": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "Enable compatibility access to decrypted files through the standard FileSystemProvider. **Unsafe for plaintext persistence:** standard editor backups, other extensions, language servers, and Save As can expose contents. Vaults disconnect when this setting changes. Use the protected editor by default."
         }
       }
+    },
+    "customEditors": [
+      {
+        "viewType": "venc.protectedEditor",
+        "displayName": "venc Protected Editor",
+        "selector": [
+          {
+            "filenamePattern": "*"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "venc.protectedFiles",
+          "name": "venc: Protected Files"
+        }
+      ]
+    },
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "venc.openProtectedFile",
+          "when": "resourceScheme == venc && !explorerResourceIsFolder",
+          "group": "navigation"
+        }
+      ]
     }
   },
   "scripts": {

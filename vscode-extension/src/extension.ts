@@ -5,12 +5,17 @@ import { access, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { CoreClient } from './coreClient';
 import { VaultProvider, SCHEME } from './vaultProvider';
+import { ProtectedEditor, PROTECTED_EDITOR } from './protectedEditor';
+import { ProtectedFiles } from './protectedFiles';
 
 interface Mount { client: CoreClient; root: vscode.Uri; name: string; capabilities: string[] }
 interface Opened { vaultId: string; protocol: number; capabilities?: string[] }
 const mounts = new Map<string, Mount>();
 let provider: VaultProvider;
 let status: vscode.StatusBarItem;
+let protectedEditor: ProtectedEditor;
+let protectedFiles: ProtectedFiles;
+let plaintextAccess = false;
 let busy = false;
 
 function owned(uri: vscode.Uri, authority: string): boolean { return uri.scheme === SCHEME && uri.authority === authority; }
@@ -35,12 +40,14 @@ function locations(context: vscode.ExtensionContext): Record<string, string> {
 function updateStatus(): void {
     const locked = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === SCHEME && !mounts.has(folder.uri.authority)).length ?? 0;
     status.text = busy ? '$(sync~spin) venc' : `$(lock) venc: ${mounts.size} open${locked ? ` / ${locked} locked` : ''}`;
-    status.tooltip = busy ? 'Vault operation in progress' : 'Manage encrypted vaults. Locking releases keys; VS Code editor buffers and backups are not securely erased.';
+    status.tooltip = busy ? 'Vault operation in progress' : 'Manage encrypted vaults. Use Protected Files to edit with encrypted backups.';
+    protectedFiles?.refresh();
     status.command = mounts.size ? 'venc.lockVault' : 'venc.openVault';
     status.show();
     void vscode.commands.executeCommand('setContext', 'venc.hasUnlockedVault', mounts.size > 0);
 }
 async function safetySettings(uri?: vscode.Uri): Promise<boolean> {
+    if (!plaintextAccess) { return true; }
     const safe = () => vscode.workspace.getConfiguration('files', uri).get('hotExit') === 'off'
         && vscode.workspace.getConfiguration('workbench.localHistory', uri).get('enabled') === false;
     if (safe()) { return true; }
@@ -108,7 +115,7 @@ async function open(context: vscode.ExtensionContext, create: boolean, knownPath
     const binary = await executable(context); // Report setup errors before asking for secrets.
     const safetyUri = expectedAuthority ? vscode.Uri.from({ scheme: SCHEME, authority: expectedAuthority, path: '/' }) : undefined;
     if (!await safetySettings(safetyUri)) { return; }
-    const accepted = await vscode.window.showWarningMessage(
+    const accepted = !plaintextAccess ? 'Continue' : await vscode.window.showWarningMessage(
         'The standard VS Code editor can write plaintext crash backups even with Hot Exit disabled. Use a profile with appropriately protected storage.',
         { modal: true }, 'Continue');
     if (accepted !== 'Continue') { return; }
@@ -117,8 +124,9 @@ async function open(context: vscode.ExtensionContext, create: boolean, knownPath
     try {
         client = new CoreClient(binary);
         try {
-            const hello = await client.request<{ protocol: number }>('hello', {});
-            if (!hello || hello.protocol !== 1) { throw new Error('protocol mismatch'); }
+            const hello = await client.request<{ protocol: number; capabilities?: string[] }>('hello', {});
+            if (!hello || hello.protocol !== 1 || (hello.capabilities !== undefined && (!Array.isArray(hello.capabilities) || hello.capabilities.some(c => typeof c !== 'string')))
+                || (!plaintextAccess && !hello.capabilities?.includes('protectedEditor'))) { throw new Error('protocol mismatch'); }
         } catch { throw new Error('The executable does not support the current venc protocol. Update the Rust core before entering passwords.'); }
         secret = await passwords(create); if (!secret) { return; }
         let result: Opened;
@@ -127,7 +135,8 @@ async function open(context: vscode.ExtensionContext, create: boolean, knownPath
                 () => client!.request<Opened>(create ? 'init' : 'unlock', { vault, ...secret }));
         } finally { release(secret); }
         if (!result || result.protocol !== 1 || !/^[a-f0-9]{32}$/.test(result.vaultId)
-            || (result.capabilities !== undefined && (!Array.isArray(result.capabilities) || result.capabilities.some(item => typeof item !== 'string')))) {
+            || (result.capabilities !== undefined && (!Array.isArray(result.capabilities) || result.capabilities.some(item => typeof item !== 'string')))
+            || (!plaintextAccess && !result.capabilities?.includes('protectedEditor'))) {
             throw new Error('Unsupported core protocol. Update the Rust core and extension together.');
         }
         const authority = result.vaultId;
@@ -142,14 +151,14 @@ async function open(context: vscode.ExtensionContext, create: boolean, knownPath
         provider.mount(authority, client); mounts.set(authority, mount);
         client.on('closed', () => {
             if (mounts.get(authority)?.client === mountedClient) {
-                provider.unmount(authority); mounts.delete(authority); updateStatus();
-                void vscode.window.showErrorMessage(`Vault “${mount.name}” disconnected. Unsaved editor buffers may remain; reopen the vault to save them.`);
+                protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); updateStatus();
+                void vscode.window.showErrorMessage(`Vault “${mount.name}” disconnected. Protected editors were closed. Changes since the last encrypted backup may be lost. Reopen the vault before restoring editors; compatibility buffers may remain.`);
             }
         });
         client = undefined; // Mount now owns it.
         if (!vscode.workspace.workspaceFolders?.some(folder => folder.uri.toString() === root.toString())) {
             if (!vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders?.length ?? 0, 0, { uri: root, name: `venc: ${mount.name}` })) {
-                provider.unmount(authority); mounts.delete(authority); mountedClient.dispose();
+                protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mountedClient.dispose();
                 throw new Error('Cannot add the virtual workspace folder.');
             }
         }
@@ -159,18 +168,19 @@ async function open(context: vscode.ExtensionContext, create: boolean, knownPath
 }
 async function lock(authority: string): Promise<boolean> {
     const mount = mounts.get(authority); if (!mount) { return true; }
-    if (dirtyFor(authority).length || tabsFor(authority).some(tab => tab.isDirty)) {
+    if (protectedEditor.dirty(authority) || dirtyFor(authority).length || tabsFor(authority).some(tab => tab.isDirty)) {
         const choice = await vscode.window.showWarningMessage('Save vault changes before locking?', { modal: true }, 'Save and Lock');
         if (choice !== 'Save and Lock') { return false; }
+        await protectedEditor.saveAll(authority);
         for (const document of dirtyFor(authority)) {
             if (!await document.save()) { throw new Error('Save failed. Vault remains open.'); }
         }
     }
     const tabs = tabsFor(authority);
-    if (tabs.some(tab => tab.isDirty) || dirtyFor(authority).length) { throw new Error('Save remaining vault editors before locking.'); }
+    if (protectedEditor.dirty(authority) || tabs.some(tab => tab.isDirty) || dirtyFor(authority).length) { throw new Error('Save remaining vault editors before locking.'); }
     if (tabs.length && !await vscode.window.tabGroups.close(tabs, true)) { return false; }
-    if (dirtyFor(authority).length || tabsFor(authority).length) { throw new Error('Vault editors changed while locking. Close or save them and retry.'); }
-    provider.unmount(authority); mounts.delete(authority); updateStatus();
+    if (protectedEditor.dirty(authority) || dirtyFor(authority).length || tabsFor(authority).length) { throw new Error('Vault editors changed while locking. Close or save them and retry.'); }
+    protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); updateStatus();
     try { await mount.client.request('lock', {}); } finally { mount.client.dispose(); }
     return true; // Keep the locked workspace URI: removing the first folder restarts the host.
 }
@@ -189,7 +199,20 @@ async function changePasswords(context: vscode.ExtensionContext): Promise<void> 
 }
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     busy = false;
-    provider = new VaultProvider();
+    plaintextAccess = vscode.workspace.getConfiguration('venc').get<boolean>('allowPlaintextAccess', false) === true;
+    provider = new VaultProvider(SCHEME, () => plaintextAccess);
+    protectedEditor = new ProtectedEditor(provider);
+    provider.guardMutation = uri => protectedEditor.guardMutation(uri);
+    protectedFiles = new ProtectedFiles(provider, () => [...mounts.values()].map(m => ({ uri: m.root, name: m.name })));
+    context.subscriptions.push(protectedEditor, protectedFiles,
+        vscode.window.registerCustomEditorProvider(PROTECTED_EDITOR, protectedEditor, { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } }),
+        vscode.window.createTreeView('venc.protectedFiles', { treeDataProvider: protectedFiles }),
+        vscode.commands.registerCommand('venc.openProtectedFile', async (uri?: vscode.Uri) => {
+            try {
+                if (!uri || uri.scheme !== SCHEME) { throw new Error('Choose a file in the Protected Files view or the vault Explorer context menu.'); }
+                await vscode.commands.executeCommand('vscode.openWith', uri, PROTECTED_EDITOR);
+            } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Cannot open protected file.'); }
+        }));
     status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
     status.name = 'venc Vaults';
     context.subscriptions.push(status, provider, vscode.workspace.registerFileSystemProvider(SCHEME, provider, { isCaseSensitive: true, isReadonly: false }));
@@ -221,11 +244,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showInformationMessage('Remembered vault location removed. The encrypted vault is unchanged.');
     });
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
-        if (event.affectsConfiguration('files.hotExit') || event.affectsConfiguration('workbench.localHistory.enabled')) {
+        if (event.affectsConfiguration('venc.allowPlaintextAccess')) {
+            for (const [authority, mount] of mounts) {
+                protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
+            }
+            plaintextAccess = vscode.workspace.getConfiguration('venc').get<boolean>('allowPlaintextAccess', false) === true;
+            void vscode.window.showWarningMessage('Vaults locked after changing plaintext access; unbacked protected edits may be lost. Reopen to use the new mode. Compatibility mode exposes plaintext to editor backups and other extensions.');
+            updateStatus();
+        }
+        if (plaintextAccess && (event.affectsConfiguration('files.hotExit') || event.affectsConfiguration('workbench.localHistory.enabled'))) {
             for (const [authority, mount] of mounts) {
                 if (vscode.workspace.getConfiguration('files', mount.root).get('hotExit') !== 'off'
                     || vscode.workspace.getConfiguration('workbench.localHistory', mount.root).get('enabled') !== false) {
-                    provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
+                    protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
                     void vscode.window.showErrorMessage('Vault locked because Hot Exit or Local History was enabled. Editor buffers may still exist; restore the settings before reopening.');
                 }
             }
@@ -234,7 +265,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }), vscode.workspace.onDidChangeWorkspaceFolders(() => {
         for (const [authority, mount] of mounts) {
             if (!vscode.workspace.workspaceFolders?.some(folder => owned(folder.uri, authority))) {
-                provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
+                const protectedDirty = protectedEditor.dirty(authority);
+                protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
+                if (protectedDirty) { void vscode.window.showWarningMessage('Protected editors closed after removing the vault folder. Changes since the last encrypted backup may be lost.'); }
                 if (dirtyFor(authority).length) { void vscode.window.showWarningMessage('Vault disconnected after removing its folder. Reopen it to save remaining editor buffers.'); }
             }
         }
@@ -251,5 +284,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 export function deactivate(): void {
     const clients = [...mounts.values()].map(mount => mount.client);
     mounts.clear();
+    protectedEditor?.dispose();
     for (const client of clients) { client.dispose(); }
 }

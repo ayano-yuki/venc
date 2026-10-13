@@ -25,10 +25,11 @@ class FileSystemError extends Error {
 for (const code of ['Unavailable', 'NoPermissions', 'FileNotFound', 'FileExists', 'FileNotADirectory', 'FileIsADirectory']) {
     FileSystemError[code] = message => new FileSystemError(code, message);
 }
-const mock = { Uri, Disposable, EventEmitter: Emitter, FileSystemError, FileType: { File: 1, Directory: 2 }, FileChangeType: { Changed: 1, Created: 2, Deleted: 3 } };
+const mock = { __esModule: true, Uri, Disposable, EventEmitter: Emitter, FileSystemError, FileType: { File: 1, Directory: 2 }, FileChangeType: { Changed: 1, Created: 2, Deleted: 3 } };
 const load = Module._load;
 Module._load = function (id, ...args) { return id === 'vscode' ? mock : load.call(this, id, ...args); };
 const { VaultProvider } = require('../dist/vaultProvider');
+const { ProtectedEditor } = require('../dist/protectedEditor');
 Module._load = load;
 const { CoreClient } = require('../dist/coreClient');
 const binary = process.env.VENC_TEST_CORE || path.resolve(__dirname, '../../target/debug', process.platform === 'win32' ? 'venc.exe' : 'venc');
@@ -37,7 +38,7 @@ test('provider with real Rust child: directories, binary data, options, events, 
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-provider-'));
     const vault = path.join(temp, 'vault');
     const client = new CoreClient(binary);
-    const provider = new VaultProvider();
+    const provider = new VaultProvider('venc', () => true);
     t.after(async () => { client.dispose(); provider.dispose(); await fs.rm(temp, { recursive: true, force: true }); });
     const hello = await client.request('hello', {});
     assert.equal(hello.protocol, 1);
@@ -103,6 +104,8 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     const handlers = new Map();
     const errors = [];
     let registered;
+    let registeredProtected;
+    let compatibility = true;
     let closeAllowed = true;
     let saveAllowed = false;
     let choice = 'Save and Lock';
@@ -118,12 +121,13 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     class TabInputText { constructor(uri) { this.uri = uri; } }
     Object.assign(mock, {
         ConfigurationTarget: { Global: 1 }, ProgressLocation: { Notification: 1 }, StatusBarAlignment: { Left: 1 },
-        TabInputText, TabInputNotebook: class {}, TabInputCustom: class {}, TabInputTextDiff: class {}, TabInputNotebookDiff: class {},
+        TabInputText, TabInputNotebook: class {}, TabInputCustom: class extends TabInputText { constructor(uri) { super(uri); this.viewType = 'venc.protectedEditor'; } }, TabInputTextDiff: class {}, TabInputNotebookDiff: class {},
         workspace: {
             isTrusted: true, workspaceFolders: folders, textDocuments: documents, notebookDocuments: [],
             getConfiguration(section) { return { get(key, fallback) {
                 if (section === 'files' && key === 'hotExit') return 'off';
                 if (section === 'workbench.localHistory' && key === 'enabled') return historyEnabled;
+                if (section === 'venc' && key === 'allowPlaintextAccess') return compatibility;
                 if (section === 'venc' && key === 'corePath') return configuredBinary;
                 return fallback;
             } }; },
@@ -136,6 +140,8 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
             showInputBox: async () => inputs.shift(),
             showOpenDialog: async () => [{ fsPath: temp, scheme: 'file' }],
             createStatusBarItem: () => status,
+            registerCustomEditorProvider: (_name, value) => { registeredProtected = value; return new Disposable(() => {}); },
+            createTreeView: () => new Disposable(() => {}),
             showInformationMessage: async message => { notices.push(message); },
             showWarningMessage: async message => message.startsWith('The standard') ? 'Continue' : choice,
             showErrorMessage: async message => { errors.push(message); },
@@ -209,7 +215,7 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     configurationChanged({ affectsConfiguration: () => false });
     assert.equal((await registered.stat(file)).size, 5);
     historyEnabled = true;
-    configurationChanged({ affectsConfiguration: () => true });
+    configurationChanged({ affectsConfiguration: key => key === 'workbench.localHistory.enabled' });
     await assert.rejects(registered.stat(file), { code: 'Unavailable' });
     historyEnabled = false;
     // Allow EOF to release the old core's OS lock after emergency disconnect.
@@ -231,6 +237,37 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
         assert.deepEqual(inputs, ['sensitive-a', 'sensitive-b']);
         assert(errors.some(message => message.includes('before entering passwords')));
     }
+    compatibility = false;
+    configuredBinary = binary;
+    inputs.length = 0;
+    configurationChanged({ affectsConfiguration: key => key === 'venc.allowPlaintextAccess' });
+    const errorsBefore = errors.length;
+    inputs.push('vault-protected', 'a', 'b', 'a', 'b');
+    await handlers.get('venc.createVault')();
+    assert.equal(errors.length, errorsBefore, 'Protected opening needs no global history setting changes');
+    const protectedRoot = folders.at(-1).uri;
+    const protectedUri = protectedRoot.with({ path: '/note.txt' });
+    await registered.writeFile(protectedUri, Buffer.alloc(0), { create: true, overwrite: false });
+    await assert.rejects(registered.readFile(protectedUri), { code: 'NoPermissions' });
+    const custom = await registeredProtected.openCustomDocument(protectedUri, {}, { isCancellationRequested: false });
+    registeredProtected.update(custom, 'protected extension lifecycle');
+    mock.window.tabGroups.activeTabGroup = mock.window.tabGroups.all[0];
+    mock.commands.executeCommand = async (name, uri) => {
+        if (name === 'vscode.openWith') {
+            mock.window.tabGroups.all[0].tabs = [{ input: new mock.TabInputCustom(uri), isDirty: custom.dirty }];
+            mock.window.tabGroups.activeTabGroup.activeTab = mock.window.tabGroups.all[0].tabs[0];
+        } else if (name === 'workbench.action.files.save') {
+            await registeredProtected.saveCustomDocument(custom, { isCancellationRequested: false });
+            mock.window.tabGroups.all[0].tabs[0].isDirty = false;
+        }
+    };
+    choice = 'Save and Lock';
+    await handlers.get('venc.lockVault')();
+    assert.equal(errors.length, errorsBefore, JSON.stringify(errors));
+    assert.equal(custom.active, false);
+    assert.equal(custom.text, '');
+    await assert.rejects(registered.stat(protectedUri), { code: 'Unavailable' });
+
 
 
 });
@@ -256,7 +293,7 @@ test('malformed response revokes connection', { skip: process.platform === 'win3
 });
 
 test('revoked mount rejects an in-flight read before returning plaintext', async () => {
-    const provider = new VaultProvider();
+    const provider = new VaultProvider('venc', () => true);
     let reply;
     const client = { closed: false, request: () => new Promise(resolve => { reply = resolve; }) };
     const root = provider.mount('race', client);
@@ -292,7 +329,7 @@ test('pending requests are bounded and shutdown rejects the accepted queue', { s
 });
 
 test('malformed file payload locks the provider instead of returning silently decoded data', async () => {
-    const provider = new VaultProvider();
+    const provider = new VaultProvider('venc', () => true);
     let closed = false;
     const client = { get closed() { return closed; }, request: async () => ({ data: '!!!!' }), dispose: () => { closed = true; } };
     const root = provider.mount('invalid-data', client);
@@ -300,4 +337,88 @@ test('malformed file payload locks the provider instead of returning silently de
     assert.equal(closed, true);
     await assert.rejects(provider.stat(root), { code: 'Unavailable' });
     provider.dispose();
+});
+
+
+test('protected editor: default deny, encrypted drafts, revision conflicts, Save As refusal, revoke', async t => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-protected-'));
+    const vault = path.join(temp, 'vault');
+    const client = new CoreClient(binary);
+    const provider = new VaultProvider();
+    const editor = new ProtectedEditor(provider);
+    t.after(async () => { editor.dispose(); provider.dispose(); client.dispose(); await fs.rm(temp, { recursive: true, force: true }); });
+    const opened = await client.request('init', { vault, passwordA: 'a', passwordB: 'b' });
+    const root = provider.mount(opened.vaultId, client);
+    const file = root.with({ path: '/protected.txt' });
+    const token = { isCancellationRequested: false };
+    await provider.writeFile(file, Buffer.alloc(0), { create: true, overwrite: false });
+    await assert.rejects(provider.readFile(file), { code: 'NoPermissions' });
+    await assert.rejects(provider.writeFile(file, Buffer.from('leak'), { create: false, overwrite: true }), { code: 'NoPermissions' });
+    const doc = await editor.openCustomDocument(file, {}, token);
+    const changes = [];
+    editor.onDidChangeCustomDocument(event => changes.push(event));
+    editor.update(doc, 'secret </script><script>leak()</script> 日本語\r\n');
+    assert.equal(changes.length, 1);
+    await assert.rejects(editor.saveCustomDocumentAs(doc, Uri.file(path.join(temp, 'export.txt')), token), { code: 'NoPermissions' });
+    assert.equal(await fs.access(path.join(temp, 'export.txt')).then(() => true, () => false), false);
+    provider.guardMutation = uri => editor.guardMutation(uri);
+    await assert.rejects(provider.rename(file, file.with({ path: '/renamed' }), { overwrite: false }), { code: 'NoPermissions' });
+    await assert.rejects(provider.delete(file, { recursive: false }), { code: 'NoPermissions' });
+    let receive;
+    let disposePanel;
+    const posted = [];
+    const panel = { webview: { options: {}, html: '',
+        onDidReceiveMessage(fn) { receive = fn; return new Disposable(() => {}); },
+        postMessage: async message => { posted.push(message); return true; } },
+        onDidDispose(fn) { disposePanel = fn; return new Disposable(() => {}); },
+        dispose() { disposePanel?.(); } };
+    editor.resolveCustomEditor(doc, panel);
+    assert(!panel.webview.html.includes('secret </script>'));
+    assert(panel.webview.html.includes("default-src 'none'"));
+    assert.deepEqual(panel.webview.options.localResourceRoots, []);
+    assert(!panel.webview.html.includes('setState('));
+    await receive({ type: 'ready' });
+    const initial = posted.at(-1);
+    assert.equal(initial.text, doc.text);
+    const version = doc.version;
+    await receive({ type: 'edit', text: 'wrong epoch', epoch: initial.epoch + 1, sequence: 1 });
+    assert.equal(doc.version, version);
+    await receive({ type: 'edit', text: 'invalid\0text', epoch: initial.epoch, sequence: 1 });
+    assert.equal(doc.version, version);
+    // Changes arriving while Rust saves must remain dirty, even if the first snapshot committed.
+    const originalWrite = provider.writeDocument.bind(provider);
+    provider.writeDocument = async (...args) => {
+        const revision = await originalWrite(...args);
+        editor.update(doc, doc.text + ' later edit');
+        return revision;
+    };
+    await assert.rejects(editor.saveCustomDocument(doc, token), /New edits/);
+    assert.equal(doc.dirty, true);
+    provider.writeDocument = originalWrite;
+    const destination = Uri.file(path.join(temp, 'backup-plaintext'));
+    const backup = await editor.backupCustomDocument(doc, { destination }, token);
+    assert.equal(await fs.access(destination.path).then(() => true, () => false), false);
+    const expected = doc.text;
+    doc.dispose();
+    const restored = await editor.openCustomDocument(file, { backupId: backup.id }, token);
+    assert.equal(restored.text, expected);
+    await editor.saveCustomDocument(restored, token);
+    assert.equal(restored.dirty, false);
+    assert.equal((await provider.readDocument(file)).text, expected);
+    // A restored stale backup must not overwrite a later saved revision.
+    restored.dispose();
+    const stale = await editor.openCustomDocument(file, { backupId: backup.id }, token);
+    editor.update(stale, 'stale overwrite');
+    await assert.rejects(editor.saveCustomDocument(stale, token));
+    assert.equal(stale.dirty, true);
+    assert.equal((await provider.readDocument(file)).text, expected);
+    await editor.revertCustomDocument(stale, token);
+    assert.equal(stale.dirty, false);
+    editor.revoke(root.authority);
+    assert.equal(stale.text, '');
+    assert.equal(stale.active, false);
+    await assert.rejects(editor.saveCustomDocument(stale, token), { code: 'Unavailable' });
+    for (const name of await fs.readdir(path.join(vault, 'objects'))) {
+        assert.equal((await fs.readFile(path.join(vault, 'objects', name))).includes(Buffer.from('secret')), false);
+    }
 });

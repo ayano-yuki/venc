@@ -4,7 +4,8 @@ import { CoreConnection, CoreError } from './coreClient';
 export const SCHEME = 'venc';
 interface CoreStat { kind: 'file' | 'directory'; size: number; ctime: number; mtime: number }
 export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposable {
-    constructor(private readonly scheme = SCHEME) {}
+    constructor(private readonly scheme = SCHEME, private readonly allowPlaintext = () => false) {}
+    guardMutation: (uri: vscode.Uri) => void = () => {};
     private readonly events = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
     readonly onDidChangeFile = this.events.event;
     private readonly mounts = new Map<string, CoreConnection>();
@@ -76,6 +77,7 @@ export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposab
         return entries.map(([name, kind]) => [name, kind === 'file' ? vscode.FileType.File : vscode.FileType.Directory]);
     }
     async readFile(uri: vscode.Uri): Promise<Uint8Array> {
+        if (!this.allowPlaintext()) { throw vscode.FileSystemError.NoPermissions('Open this file with venc: Open in Protected Editor. Plaintext filesystem access is disabled.'); }
         const result = await this.call<{ data: string }>(uri, 'readFile');
         if (!result || typeof result.data !== 'string' || result.data.length > 4 * Math.ceil((16 * 1024 * 1024) / 3)
             || result.data.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(result.data)
@@ -86,6 +88,41 @@ export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposab
         if (bytes.length > 16 * 1024 * 1024) { bytes.fill(0); this.invalid(uri); }
         return bytes;
     }
+    async readDocument(uri: vscode.Uri, backup?: string): Promise<{ text: string; revision: string }> {
+        const result = await this.call<{ data: string; revision: string }>(uri, backup ? 'readBackup' : 'readDocument', backup ? { backup } : {});
+        if (!result || typeof result.revision !== 'string' || !/^[a-f0-9]{32}$/.test(result.revision)
+            || typeof result.data !== 'string' || result.data.length > 4 * Math.ceil((16 * 1024 * 1024) / 3)) { this.invalid(uri); }
+        const bytes = Buffer.from(result.data, 'base64');
+        if (bytes.toString('base64') !== result.data || bytes.length > 16 * 1024 * 1024) { bytes.fill(0); this.invalid(uri); }
+        result.data = '';
+        try {
+            // Reject binary and malformed UTF-8 instead of silently corrupting them.
+            const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+            if (text.includes('\0')) { throw new Error('Binary file'); }
+            return { text, revision: result.revision };
+        } catch { throw vscode.FileSystemError.NoPermissions('The protected editor supports UTF-8 text without NUL bytes.'); }
+        finally { bytes.fill(0); }
+    }
+    async writeDocument(uri: vscode.Uri, text: string, revision: string): Promise<string> {
+        const result = await this.call<{ revision: string }>(uri, 'writeDocument', { data: this.encodeText(text), revision });
+        if (!result || typeof result.revision !== 'string' || !/^[a-f0-9]{32}$/.test(result.revision)) { this.invalid(uri); }
+        this.changed(uri, vscode.FileChangeType.Changed);
+        return result.revision;
+    }
+    private encodeText(text: string): string {
+        if (Buffer.byteLength(text) > 16 * 1024 * 1024) { throw vscode.FileSystemError.NoPermissions('File exceeds the 16 MiB limit.'); }
+        const bytes = Buffer.from(text, 'utf8');
+        try {
+            if (bytes.toString('utf8') !== text) { throw vscode.FileSystemError.NoPermissions('Invalid Unicode text.'); }
+            return bytes.toString('base64');
+        } finally { bytes.fill(0); }
+    }
+    async createBackup(uri: vscode.Uri, text: string, revision: string): Promise<string> {
+        const result = await this.call<{ backup: string }>(uri, 'createBackup', { data: this.encodeText(text), revision });
+        if (!result || typeof result.backup !== 'string' || !/^[a-f0-9]{32}$/.test(result.backup)) { this.invalid(uri); }
+        return result.backup;
+    }
+    async deleteBackup(uri: vscode.Uri, backup: string): Promise<void> { await this.call(uri, 'deleteBackup', { backup }); }
     private changed(uri: vscode.Uri, type: vscode.FileChangeType): void {
         const parent = uri.with({ path: uri.path.slice(0, uri.path.lastIndexOf('/')) || '/' });
         this.events.fire([{ type, uri }, { type: vscode.FileChangeType.Changed, uri: parent }]);
@@ -95,6 +132,9 @@ export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposab
         let existed = false;
         try { await this.stat(uri); existed = true; }
         catch (error) { if (!(error instanceof vscode.FileSystemError) || error.code !== 'FileNotFound') { throw error; } }
+        if (!this.allowPlaintext() && (existed || content.byteLength || !options.create)) {
+            throw vscode.FileSystemError.NoPermissions('Use the protected editor to write vault contents.');
+        }
         await this.call(uri, 'writeFile', { ...options, data: Buffer.from(content.buffer, content.byteOffset, content.byteLength).toString('base64') });
         this.changed(uri, existed ? vscode.FileChangeType.Changed : vscode.FileChangeType.Created);
     }
@@ -114,9 +154,11 @@ export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposab
         for (const created of missing) { this.changed(created, vscode.FileChangeType.Created); }
     }
     async delete(uri: vscode.Uri, options: { recursive: boolean }): Promise<void> {
+        this.guardMutation(uri);
         await this.call(uri, 'delete', options); this.changed(uri, vscode.FileChangeType.Deleted);
     }
     async rename(oldUri: vscode.Uri, newUri: vscode.Uri, options: { overwrite: boolean }): Promise<void> {
+        this.guardMutation(oldUri); this.guardMutation(newUri);
         if (oldUri.authority !== newUri.authority) { throw vscode.FileSystemError.NoPermissions('Moving between vaults is unsupported.'); }
         const target = this.path(newUri);
         if (oldUri.toString() === newUri.toString()) { await this.stat(oldUri); return; }

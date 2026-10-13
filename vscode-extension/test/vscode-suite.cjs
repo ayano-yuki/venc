@@ -10,7 +10,7 @@ exports.run = async () => {
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-electron-'));
     const vault = path.join(temp, 'vault');
     const client = new CoreClient(process.env.VENC_TEST_CORE);
-    const provider = new VaultProvider("venc-test");
+    const provider = new VaultProvider("venc-test", () => true);
     let registration;
     try {
         await vscode.workspace.getConfiguration('files').update('hotExit', 'off', vscode.ConfigurationTarget.Global);
@@ -64,6 +64,7 @@ exports.run = async () => {
             assert.deepEqual(await vscode.workspace.fs.readDirectory(root), []);
         } finally { reopened.dispose(); }
         console.log('VS Code editor integration: virtual FS create/read/edit/save/rename/lock/reopen/delete passed');
+        if (process.env.VENC_PROBE_BACKUPS === '1') { await require('./protected-suite.cjs').run(); }
         if (process.env.VENC_PROBE_BACKUPS !== '1') {
             registration.dispose(); registration = undefined;
             provider.dispose();

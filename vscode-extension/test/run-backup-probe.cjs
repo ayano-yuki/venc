@@ -13,7 +13,7 @@ const { downloadAndUnzipVSCode } = require('@vscode/test-electron');
     const result = path.join(temp, 'result.json');
     await fs.mkdir(extension, { recursive: true });
     await fs.writeFile(path.join(extension, 'package.json'), JSON.stringify({ name: 'venc-backup-probe', publisher: 'venc-test',
-        version: '0.0.1', engines: { vscode: '^1.95.0' }, activationEvents: ['onStartupFinished'], main: './main.cjs' }));
+        version: '0.0.1', engines: { vscode: '^1.95.0' }, activationEvents: ['onStartupFinished'], main: './main.cjs', contributes: { customEditors: [{ viewType: 'venc.protectedEditor', displayName: 'venc Protected Editor', selector: [{ filenamePattern: '*' }], priority: 'option' }] } }));
     await fs.writeFile(path.join(extension, 'main.cjs'), `
 exports.activate = async () => {
     try { await require(${JSON.stringify(path.join(__dirname, 'vscode-suite.cjs'))}).run();
@@ -31,13 +31,13 @@ exports.activate = async () => {
     let exited = false;
     const exit = new Promise(resolve => child.once('exit', () => { exited = true; resolve(); }));
     try {
-        const deadline = Date.now() + 45_000;
+        const deadline = Date.now() + 90_000;
         while (Date.now() < deadline && !exited) {
             const content = await fs.readFile(result, 'utf8').catch(() => undefined);
             if (content) {
                 const outcome = JSON.parse(content);
                 if (!outcome.passed) { throw new Error(outcome.error); }
-                console.log('Normal VS Code profile: confirmed plaintext backup with Hot Exit off; editor roundtrip passed');
+                console.log('Normal VS Code profile: protected editor encrypted drafts verified; compatibility plaintext backup reproduced');
                 return;
             }
             await new Promise(resolve => setTimeout(resolve, 200));
