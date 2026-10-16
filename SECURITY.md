@@ -56,3 +56,5 @@ Actual VS Code integration tests cover compatibility edits and extension activat
 Local verification is Linux x64. Cross-platform CI configuration does not substitute for a completed independent audit or power-loss test.
 
 References: [VS Code custom editor API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider), [VS Code 1.95.3 backup tracker](https://github.com/microsoft/vscode/blob/1.95.3/src/vs/workbench/services/workingCopy/common/workingCopyBackupTracker.ts).
+
+Normal-profile editor tests now drive the real renderer through the test-only Chromium debugging connection: IME composition, typing, Undo/Redo, literal replacement, and keyboard save. They then kill the disposable VS Code process group, restart the same profile, and recover a draft through the real picker/input UI without overwriting the saved file. The debugging port is confined to tests and localhost. CI runs this on the minimum editor version and stable; CI configuration is not a claim that remote jobs have passed.

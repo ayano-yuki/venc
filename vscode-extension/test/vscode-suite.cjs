@@ -40,9 +40,11 @@ exports.run = async () => {
         };
         if (process.env.VENC_PROBE_BACKUPS === '1') {
             await new Promise(resolve => setTimeout(resolve, 2500));
-            assert.equal(await contains(path.join(process.env.VENC_TEST_USER_DATA, 'Backups'), 'encrypted editor save'), true,
-                'Pinned VS Code creates plaintext crash backups even with Hot Exit off');
-            console.log('Confirmed limitation: dirty standard editor creates plaintext crash backup with Hot Exit off');
+            const plaintextBackup = await contains(path.join(process.env.VENC_TEST_USER_DATA, 'Backups'), 'encrypted editor save');
+            if (!process.env.VENC_TEST_VSCODE_VERSION || process.env.VENC_TEST_VSCODE_VERSION === '1.95.3') {
+                assert.equal(plaintextBackup, true, 'Pinned VS Code creates plaintext crash backups with Hot Exit off');
+            }
+            console.log('Compatibility plaintext backup observed with Hot Exit off:', plaintextBackup);
         }
         assert.equal(await document.save(), true);
         assert.equal(await contains(vault, 'encrypted editor save'), false);

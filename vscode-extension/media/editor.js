@@ -26,6 +26,7 @@
             eol.value = m.eol || 'LF'; eol.disabled = frozen;
             status.textContent = m.dirty ? 'Unsaved changes' : 'Saved';
         } else if (m.type === 'status') { status.textContent = m.message; }
+        else if (m.type === 'focus') { text.focus(); }
         else if (m.type === 'snapshot') { if (composing) { pendingSnapshots.push(m); } else { snapshot(m); } }
         else if (m.type === 'resume') { frozen = false; text.readOnly = false; eol.disabled = false; }
         else if (m.type === 'clear') {
@@ -37,7 +38,7 @@
     text.addEventListener('compositionend', () => { composing = false; emit(); for (const message of pendingSnapshots.splice(0)) { snapshot(message); } });
     text.addEventListener('input', () => { if (!composing) { emit(); } });
     text.addEventListener('keydown', event => {
-        if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !frozen) { event.preventDefault(); text.setRangeText('\t', text.selectionStart, text.selectionEnd, 'end'); emit(); }
+        if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !frozen) { event.preventDefault(); event.stopPropagation(); text.setRangeText('\t', text.selectionStart, text.selectionEnd, 'end'); emit(); }
     });
     const pattern = () => {
         if (!query.value) { status.textContent = 'Enter search text'; return; }
@@ -78,10 +79,10 @@
     document.addEventListener('keydown', event => {
         if ((event.ctrlKey || event.metaKey) && !event.altKey) {
             const key = event.key.toLowerCase();
-            if (key === 's') { event.preventDefault(); api.postMessage({ type: 'save' }); }
-            else if (key === 'f' || key === 'h') { event.preventDefault(); search.hidden = false; query.focus(); query.select(); }
+            if (key === 's') { event.preventDefault(); event.stopPropagation(); api.postMessage({ type: 'save' }); }
+            else if (key === 'f' || key === 'h') { event.preventDefault(); event.stopPropagation(); search.hidden = false; query.focus(); query.select(); }
             else if (event.target === text && (key === 'z' || key === 'y')) {
-                event.preventDefault(); api.postMessage({ type: key === 'y' || event.shiftKey ? 'redo' : 'undo' });
+                event.preventDefault(); event.stopPropagation(); api.postMessage({ type: key === 'y' || event.shiftKey ? 'redo' : 'undo' });
             }
         } else if (event.key === 'Escape' && !search.hidden) { search.hidden = true; text.focus(); }
     });

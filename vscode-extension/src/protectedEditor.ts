@@ -134,6 +134,7 @@ export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDoc
                     this.update(doc, normalizeEol(doc.text).replace(/\n/g, eol)); doc.eol = eol; this.refresh(doc);
                 } else if (m.type === 'undo' || m.type === 'redo') {
                     await this.flush(doc); await this.focus(doc); await vscode.commands.executeCommand(m.type);
+                    void panel.webview.postMessage({ type: 'focus' });
                 } else if (m.type === 'save') { await this.saveViaWorkbench(doc); }
             } catch (error) {
                 void panel.webview.postMessage({ type: 'status', message: error instanceof Error ? error.message : 'Operation failed' });

@@ -54,5 +54,6 @@ jobs:
         env:
           VENC_TEST_VSCODE_VERSION: ${{ matrix.vscode }}
       - run: xvfb-run -a npm run test:backups
-        if: matrix.vscode == '1.95.3'
         working-directory: vscode-extension
+        env:
+          VENC_TEST_VSCODE_VERSION: ${{ matrix.vscode }}

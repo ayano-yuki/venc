@@ -94,3 +94,5 @@ References: [VS Code Tree View and Activity Bar containers](https://code.visuals
 Choose **venc: Choose Editor Mode** to select protected or standard editing. Mode changes save and lock vaults first; standard editing requires explicit consent to plaintext access and backup risks.
 
 Use **venc: Import Files** or drop extension-host files onto a vault folder to encrypt them directly. Originals remain; existing vault files are never overwritten. Imports are cancellable, with at most 100 files per operation and 16 MiB per file. Cross-host drops without host paths require the file picker.
+
+Normal-profile editor tests now drive the real renderer through the test-only Chromium debugging connection: IME composition, typing, Undo/Redo, literal replacement, and keyboard save. They then kill the disposable VS Code process group, restart the same profile, and recover a draft through the real picker/input UI without overwriting the saved file. The debugging port is confined to tests and localhost. CI runs this on the minimum editor version and stable; CI configuration is not a claim that remote jobs have passed.
