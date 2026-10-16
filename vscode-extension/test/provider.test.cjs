@@ -34,6 +34,7 @@ Module._load = function (id, ...args) { return id === 'vscode' ? mock : load.cal
 const { VaultProvider } = require('../dist/vaultProvider');
 const { ProtectedEditor } = require('../dist/protectedEditor');
 const { VaultActions } = require('../dist/vaultActions');
+const { ProtectedFiles } = require('../dist/protectedFiles');
 const { VaultImporter, readImportFile } = require('../dist/importFiles');
 Module._load = load;
 const { CoreClient } = require('../dist/coreClient');
@@ -572,4 +573,29 @@ test('storage RPC reclaims only aged unreferenced objects and keeps drafts and c
     assert.equal(collected.remaining.reclaimable_files, 0);
     assert.equal((await provider.readDocument(file)).text, 'current');
     assert.equal((await provider.readDocument(file, backup)).text, 'unsaved');
+});
+
+
+test('folder loading errors are visible and retryable while locked folders disclose nothing', async () => {
+    const events = new Emitter();
+    let fail = true, reads = 0, locked = false;
+    const root = Uri.from({ scheme: 'venc', authority: 'a'.repeat(32), path: '/' });
+    const provider = { onDidChangeFile: events.event, readDirectory: async () => { reads++; if (fail) throw new Error('Storage unavailable'); return [['note', 1]]; } };
+    const tree = new ProtectedFiles(provider, () => [{ uri: root, name: 'vault', locked }]);
+    const parent = (await tree.getChildren())[0];
+    const children = await tree.getChildren(parent);
+    assert.equal(children.length, 1);
+    const errorItem = tree.getTreeItem(children[0]);
+    assert.equal(errorItem.contextValue, 'vencLoadError');
+    assert.equal(errorItem.tooltip, 'Storage unavailable');
+    assert.equal(errorItem.command.command, 'venc.retryFolder');
+    let retried;
+    tree.onDidChangeTreeData(node => { retried = node; });
+    fail = false; tree.retry(root);
+    assert.equal(retried, parent);
+    assert.equal((await tree.getChildren(retried))[0].name, 'note');
+    locked = true; tree.refresh();
+    assert.deepEqual(await tree.getChildren((await tree.getChildren())[0]), []);
+    assert.equal(reads, 2);
+    tree.dispose(); events.dispose();
 });

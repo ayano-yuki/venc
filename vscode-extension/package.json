@@ -123,6 +123,11 @@
         "title": "venc: Vault Storage and Cleanup",
         "icon": "$(database)",
         "enablement": "venc.hasUnlockedVault"
+      },
+      {
+        "command": "venc.retryFolder",
+        "title": "venc: Retry Folder",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -275,6 +280,10 @@
         },
         {
           "command": "venc.deleteEntry",
+          "when": "false"
+        },
+        {
+          "command": "venc.retryFolder",
           "when": "false"
         }
       ]

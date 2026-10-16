@@ -47,6 +47,7 @@ export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposab
             return result;
         }
         catch (error) {
+            if (error instanceof vscode.FileSystemError) { throw error; }
             if (error instanceof CoreError) {
                 switch (error.code) {
                     case 'FileNotFound': throw vscode.FileSystemError.FileNotFound(uri);
@@ -160,8 +161,10 @@ export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposab
     async writeFile(uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean }): Promise<void> {
         if (content.byteLength > 16 * 1024 * 1024) { throw vscode.FileSystemError.NoPermissions('File exceeds the 16 MiB limit.'); }
         let existed = false;
-        try { await this.stat(uri); existed = true; }
+        try { const stat = await this.stat(uri); if (stat.type === vscode.FileType.Directory) { throw vscode.FileSystemError.FileIsADirectory(uri); } existed = true; }
         catch (error) { if (!(error instanceof vscode.FileSystemError) || error.code !== 'FileNotFound') { throw error; } }
+        if (!existed && !options.create) { throw vscode.FileSystemError.FileNotFound(uri); }
+        if (existed && !options.overwrite) { throw vscode.FileSystemError.FileExists(uri); }
         if (!this.allowPlaintext() && (existed || content.byteLength || !options.create)) {
             throw vscode.FileSystemError.NoPermissions('Use the protected editor to write vault contents.');
         }

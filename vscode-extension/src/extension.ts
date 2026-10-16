@@ -8,7 +8,7 @@ import { VaultProvider, SCHEME } from './vaultProvider';
 import { ProtectedEditor, PROTECTED_EDITOR } from './protectedEditor';
 import { showStorage } from './storageView';
 import { VaultImporter } from './importFiles';
-import { VaultActions } from './vaultActions';
+import { VaultActions, itemUri } from './vaultActions';
 import { recoverDrafts } from './recovery';
 import { ProtectedFiles, VaultRoot } from './protectedFiles';
 
@@ -305,6 +305,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     command('venc.newFolder', value => actions.create(value, true));
     command('venc.renameEntry', value => actions.rename(value));
     command('venc.deleteEntry', value => actions.delete(value));
+    context.subscriptions.push(vscode.commands.registerCommand('venc.retryFolder', (value: unknown) => {
+        const uri = itemUri(value); if (uri) { protectedFiles.retry(uri); }
+    }));
     command('venc.showStorage', async () => {
         const authority = await chooseAuthority(context, true); if (!authority) { return; }
         if (!mounts.get(authority)!.capabilities.includes('storageManagement')) { throw new Error('Update the Rust core to support storage management.'); }
