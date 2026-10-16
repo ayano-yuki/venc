@@ -98,3 +98,5 @@ Linux 静的ビルドは静的ライブラリと `RUSTFLAGS="-C target-feature=+
 参考: [Tree View とアクティビティバー](https://code.visualstudio.com/api/extension-guides/tree-view)、[VS Code カスタムエディタ](https://code.visualstudio.com/api/extension-guides/custom-editors)、[CustomEditorProvider API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider)。
 
 **venc: Choose Editor Mode** から保護・標準編集を選べます。切り替え前に Vault を保存・ロックし、標準編集では平文アクセスとバックアップの条件を確認します。
+
+**venc: Import Files** または同じホストのファイルをフォルダへドラッグして暗号化保存できます。原本を残し、既存ファイルは上書きしません。取り込みは1回100ファイル・各16 MiBまでで、キャンセルと結果表示に対応します。

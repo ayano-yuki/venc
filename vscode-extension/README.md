@@ -92,3 +92,5 @@ Linux static builds require static libraries and `RUSTFLAGS="-C target-feature=+
 References: [VS Code Tree View and Activity Bar containers](https://code.visualstudio.com/api/extension-guides/tree-view), [VS Code custom editors](https://code.visualstudio.com/api/extension-guides/custom-editors), [CustomEditorProvider API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider).
 
 Choose **venc: Choose Editor Mode** to select protected or standard editing. Mode changes save and lock vaults first; standard editing requires explicit consent to plaintext access and backup risks.
+
+Use **venc: Import Files** or drop extension-host files onto a vault folder to encrypt them directly. Originals remain; existing vault files are never overwritten. Imports are cancellable, with at most 100 files per operation and 16 MiB per file. Cross-host drops without host paths require the file picker.

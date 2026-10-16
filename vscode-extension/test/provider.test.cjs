@@ -7,6 +7,8 @@ const Module = require('node:module');
 
 class Uri {
     constructor({ scheme, authority, path: uriPath, query = '', fragment = '' }) { Object.assign(this, { scheme, authority, path: uriPath, query, fragment }); }
+    get fsPath() { return this.path; }
+    static parse(value) { const parsed = new URL(value); return new Uri({ scheme: parsed.protocol.slice(0, -1), authority: parsed.host, path: decodeURIComponent(parsed.pathname) }); }
     static joinPath(uri, ...parts) { return uri.with({ path: path.posix.join(uri.path, ...parts) }); }
     static from(parts) { return new Uri(parts); }
     static file(location) { return new Uri({ scheme: "file", authority: "", path: location }); }
@@ -26,12 +28,13 @@ class FileSystemError extends Error {
 for (const code of ['Unavailable', 'NoPermissions', 'FileNotFound', 'FileExists', 'FileNotADirectory', 'FileIsADirectory']) {
     FileSystemError[code] = message => new FileSystemError(code, message);
 }
-const mock = { __esModule: true, TreeItem: class { constructor(label, collapsibleState) { Object.assign(this, { label, collapsibleState }); } }, ThemeIcon: class { constructor(id) { this.id = id; } }, TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, Uri, Disposable, EventEmitter: Emitter, FileSystemError, FileType: { File: 1, Directory: 2 }, FileChangeType: { Changed: 1, Created: 2, Deleted: 3 } };
+const mock = { __esModule: true, ProgressLocation: { Notification: 1 }, TreeItem: class { constructor(label, collapsibleState) { Object.assign(this, { label, collapsibleState }); } }, ThemeIcon: class { constructor(id) { this.id = id; } }, TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, Uri, Disposable, EventEmitter: Emitter, FileSystemError, FileType: { File: 1, Directory: 2 }, FileChangeType: { Changed: 1, Created: 2, Deleted: 3 } };
 const load = Module._load;
 Module._load = function (id, ...args) { return id === 'vscode' ? mock : load.call(this, id, ...args); };
 const { VaultProvider } = require('../dist/vaultProvider');
 const { ProtectedEditor } = require('../dist/protectedEditor');
 const { VaultActions } = require('../dist/vaultActions');
+const { VaultImporter, readImportFile } = require('../dist/importFiles');
 Module._load = load;
 const { CoreClient } = require('../dist/coreClient');
 const binary = process.env.VENC_TEST_CORE || path.resolve(__dirname, '../../target/debug', process.platform === 'win32' ? 'venc.exe' : 'venc');
@@ -518,4 +521,34 @@ test('text model preserves BOM and CRLF/mixed endings and reversible edits', () 
     assert.equal(applyPatch(original, patch, false), changed);
     assert.equal(applyPatch(changed, patch, true), original);
     assert.equal(fromRenderer('a\r\nb\nc\r\n', 'a\nb!\nc\n', '\r\n'), 'a\r\nb!\nc\r\n');
+});
+
+
+test('file import encrypts bytes, retains source, refuses overwrite/oversize, and supports URI drops', async t => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-import-'));
+    const client = new CoreClient(binary), provider = new VaultProvider();
+    const opened = await client.request('init', { vault: path.join(temp, 'vault'), passwordA: 'a', passwordB: 'b' });
+    const root = provider.mount(opened.vaultId, client);
+    const original = Buffer.from('source original stays here 日本語');
+    const source = path.join(temp, 'source.txt'); await fs.writeFile(source, original);
+    const large = path.join(temp, 'large'); const handle = await fs.open(large, 'w'); await handle.truncate(16 * 1024 * 1024 + 1); await handle.close();
+    await assert.rejects(readImportFile(Uri.file(large)));
+    const previousWindow = mock.window, notices = [];
+    mock.window = { showWarningMessage: async message => { notices.push(message); return 'Import Files'; }, showInformationMessage: async message => notices.push(message),
+        withProgress: async (_opts, callback) => callback({ report() {} }, { isCancellationRequested: false }) };
+    const actions = new VaultActions(provider, async () => root, async () => {}, async () => {});
+    const importer = new VaultImporter(provider, actions);
+    t.after(async () => { mock.window = previousWindow; provider.dispose(); client.dispose(); await fs.rm(temp, { recursive: true, force: true }); });
+    const transfer = { forEach() {}, get: mime => mime === 'text/uri-list' ? { asString: async () => 'file://' + source } : undefined };
+    await importer.handleDrop({ uri: root, directory: true }, transfer, { isCancellationRequested: false });
+    const file = Uri.joinPath(root, 'source.txt');
+    assert.equal((await provider.readDocument(file)).text, original.toString());
+    assert.deepEqual(await fs.readFile(source), original);
+    await fs.writeFile(source, 'changed source');
+    await importer.import(root, [Uri.file(source)]);
+    assert.equal((await provider.readDocument(file)).text, original.toString(), 'Import never overwrites an existing vault file');
+    assert(notices.some(message => message.startsWith('0/1')));
+    for (const entry of await fs.readdir(path.join(temp, 'vault', 'objects'))) {
+        assert.equal((await fs.readFile(path.join(temp, 'vault', 'objects', entry))).includes(original), false);
+    }
 });

@@ -112,6 +112,11 @@
         "command": "venc.selectEditorMode",
         "title": "venc: Choose Editor Mode",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "venc.importFiles",
+        "title": "venc: Import Files",
+        "icon": "$(cloud-upload)"
       }
     ],
     "configuration": {
@@ -200,6 +205,11 @@
           "command": "venc.selectEditorMode",
           "when": "view == venc.protectedFiles",
           "group": "mode"
+        },
+        {
+          "command": "venc.importFiles",
+          "when": "view == venc.protectedFiles && venc.hasUnlockedVault",
+          "group": "navigation@8"
         }
       ],
       "view/item/context": [
@@ -232,6 +242,11 @@
           "command": "venc.deleteEntry",
           "when": "view == venc.protectedFiles && (viewItem == vencDirectory || viewItem == vencFile)",
           "group": "modify"
+        },
+        {
+          "command": "venc.importFiles",
+          "when": "view == venc.protectedFiles && (viewItem == vencDirectory || viewItem == vencUnlockedVault)",
+          "group": "create"
         }
       ],
       "commandPalette": [

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { VaultProvider } from './vaultProvider';
 
 export interface VaultRoot { uri: vscode.Uri; name: string; locked: boolean }
-interface Node { uri: vscode.Uri; name: string; directory: boolean; locked?: boolean; vault?: boolean }
+export interface Node { uri: vscode.Uri; name: string; directory: boolean; locked?: boolean; vault?: boolean }
 export class ProtectedFiles implements vscode.TreeDataProvider<Node>, vscode.Disposable {
     private readonly events = new vscode.EventEmitter<Node | undefined>();
     readonly onDidChangeTreeData = this.events.event;

@@ -153,6 +153,11 @@ export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposab
         await this.call(uri, 'writeFile', { ...options, data: Buffer.from(content.buffer, content.byteOffset, content.byteLength).toString('base64') });
         this.changed(uri, existed ? vscode.FileChangeType.Changed : vscode.FileChangeType.Created);
     }
+    async importFile(uri: vscode.Uri, content: Uint8Array): Promise<void> {
+        if (content.byteLength > 16 * 1024 * 1024) { throw vscode.FileSystemError.NoPermissions('File exceeds 16 MiB.'); }
+        await this.call(uri, 'writeFile', { create: true, overwrite: false, data: Buffer.from(content.buffer, content.byteOffset, content.byteLength).toString('base64') });
+        this.changed(uri, vscode.FileChangeType.Created);
+    }
     async createDirectory(uri: vscode.Uri): Promise<void> {
         this.path(uri);
         const missing: vscode.Uri[] = [];

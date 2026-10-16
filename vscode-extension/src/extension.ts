@@ -6,6 +6,7 @@ import { constants } from 'node:fs';
 import { CoreClient } from './coreClient';
 import { VaultProvider, SCHEME } from './vaultProvider';
 import { ProtectedEditor, PROTECTED_EDITOR } from './protectedEditor';
+import { VaultImporter } from './importFiles';
 import { VaultActions } from './vaultActions';
 import { recoverDrafts } from './recovery';
 import { ProtectedFiles, VaultRoot } from './protectedFiles';
@@ -261,7 +262,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     protectedFiles = new ProtectedFiles(provider, vaultRoots);
     context.subscriptions.push(protectedEditor, protectedFiles,
         vscode.window.registerCustomEditorProvider(PROTECTED_EDITOR, protectedEditor, { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } }),
-        vscode.window.createTreeView('venc.protectedFiles', { treeDataProvider: protectedFiles }),
         vscode.commands.registerCommand('venc.openVaultFile', async (uri?: vscode.Uri) => {
             try {
                 if (!uri || uri.scheme !== SCHEME) { throw new Error('Choose a vault file.'); }
@@ -286,6 +286,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const actions = new VaultActions(provider, async () => {
         const authority = await chooseAuthority(context, true); return authority ? mounts.get(authority)?.root : undefined;
     }, async uri => { await vscode.commands.executeCommand(plaintextAccess ? 'vscode.open' : 'vscode.openWith', uri, ...(plaintextAccess ? [] : [PROTECTED_EDITOR])); }, closeForMutation);
+    const importer = new VaultImporter(provider, actions);
+    context.subscriptions.push(vscode.window.createTreeView('venc.protectedFiles', { treeDataProvider: protectedFiles, dragAndDropController: importer }));
+    command('venc.importFiles', value => importer.select(value));
     command('venc.selectEditorMode', async () => {
         const mode = await vscode.window.showQuickPick([
             { label: 'Protected editor', description: 'Encrypted drafts; no standard text model or plaintext filesystem reads', plaintext: false },
