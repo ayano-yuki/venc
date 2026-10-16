@@ -32,7 +32,7 @@ These are implemented and locally tested controls, not an independent security c
 | --- | --- |
 | Standard editor backups | Closed by the default custom editor with encrypted drafts. Explicit compatibility mode still creates plaintext backups in VS Code 1.95.3, even with Hot Exit off. Previous copies are not removed. |
 | Other editor/OS copies | Protected mode denies native reads and Save As. A compromised host/extension host can inspect plaintext memory; clipboard, swap, hibernation, dumps, and prior copies remain. Compatibility mode exposes data to extensions/language servers. Key zeroization does not erase those copies. |
-| Draft availability | Authentication is required before restoring a draft; the same path/vault must match. Unexpected disconnects close protected panels and can lose changes after the last completed draft. Orphan draft enumeration/recovery is pending. |
+| Draft availability | Authentication is required before restoring a draft; the same path/vault must match. Unexpected disconnects close protected panels and can lose changes after the last completed draft. Authenticated paginated draft enumeration, recovery to a new encrypted file, and explicit discard are available. Controlled disconnects checkpoint protected editors before revocation. |
 | JavaScript memory | Strings and runtime copies cannot be reliably zeroized. References are released promptly; clearing owned byte buffers is best effort. |
 | Rollback | Restoring a valid older vault is not detected. External trusted state would be needed. |
 | Password revocation | Older wrapped-VMK snapshots still work with their passwords. Header rewrapping is not retroactive revocation. |

@@ -3,7 +3,7 @@ mod protected;
 use anyhow::{bail, ensure, Context, Result};
 pub use filesystem::{FsError, Stat};
 use fs2::FileExt;
-pub use protected::DocumentSnapshot;
+pub use protected::{BackupInfo, BackupPage, DocumentSnapshot};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,

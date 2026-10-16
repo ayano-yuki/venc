@@ -120,7 +120,7 @@ Writes sync a new immutable encrypted object before atomically replacing encrypt
 Unix builds also sync directories and create files with mode 0600 and directories with mode 0700.
 A commit error locks the session to prevent further writes from stale in-memory state. Power-loss guarantees still depend on the OS/filesystem and have not been exhaustively tested.
 
-Replaced/deleted objects and orphan encrypted drafts can remain; automatic enumeration/recovery of orphan drafts and garbage collection are not implemented. An unexpected disconnect closes protected panels and can lose changes since the last completed encrypted backup.
+Replaced/deleted objects and orphan encrypted drafts can remain; encrypted draft enumeration/recovery is available through Recover Encrypted Drafts; garbage collection is not yet implemented. An unexpected disconnect closes protected panels and can lose changes since the last completed encrypted backup.
 Initialization failures can leave an incomplete new directory. Do not reuse it automatically or treat it as a completed vault.
 
 ## Remaining limits

@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import { CoreConnection, CoreError } from './coreClient';
 
 export const SCHEME = 'venc';
+export interface BackupInfo { id: string; path: string; size: number; modified: number }
+export interface BackupPage { entries: BackupInfo[]; next: string | null; invalid: number }
 interface CoreStat { kind: 'file' | 'directory'; size: number; ctime: number; mtime: number }
 export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposable {
     constructor(private readonly scheme = SCHEME, private readonly allowPlaintext = () => false) {}
@@ -123,6 +125,19 @@ export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposab
         return result.backup;
     }
     async deleteBackup(uri: vscode.Uri, backup: string): Promise<void> { await this.call(uri, 'deleteBackup', { backup }); }
+    async listBackups(root: vscode.Uri, after = ''): Promise<BackupPage> {
+        const page = await this.call<BackupPage>(root, 'listBackups', { after });
+        if (!page || !Array.isArray(page.entries) || page.entries.length > 20 || !Number.isSafeInteger(page.invalid) || page.invalid < 0
+            || (page.next !== null && (typeof page.next !== 'string' || !/^[a-f0-9]{32}$/.test(page.next) || page.next <= after))
+            || page.entries.some(b => !b || typeof b.id !== 'string' || !/^[a-f0-9]{32}$/.test(b.id) || typeof b.path !== 'string'
+                || !b.path || b.path.length > 4096 || b.path.split('/').some(p => !p || p === '.' || p === '..') || /[\\\0:]/.test(b.path)
+                || !Number.isSafeInteger(b.size) || b.size < 0 || b.size > 16 * 1024 * 1024 || !Number.isSafeInteger(b.modified) || b.modified < 0)) { this.invalid(root); }
+        return page;
+    }
+    async recoverBackup(target: vscode.Uri, backup: string): Promise<void> {
+        await this.call(target, 'recoverBackup', { backup });
+        this.changed(target, vscode.FileChangeType.Created);
+    }
     private changed(uri: vscode.Uri, type: vscode.FileChangeType): void {
         const parent = uri.with({ path: uri.path.slice(0, uri.path.lastIndexOf('/')) || '/' });
         this.events.fire([{ type, uri }, { type: vscode.FileChangeType.Changed, uri: parent }]);

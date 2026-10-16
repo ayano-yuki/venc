@@ -6,6 +6,7 @@ import { constants } from 'node:fs';
 import { CoreClient } from './coreClient';
 import { VaultProvider, SCHEME } from './vaultProvider';
 import { ProtectedEditor, PROTECTED_EDITOR } from './protectedEditor';
+import { recoverDrafts } from './recovery';
 import { ProtectedFiles, VaultRoot } from './protectedFiles';
 
 interface Mount { client: CoreClient; root: vscode.Uri; name: string; capabilities: string[] }
@@ -188,6 +189,8 @@ async function open(context: vscode.ExtensionContext, create: boolean, knownPath
 }
 async function lock(authority: string): Promise<boolean> {
     const mount = mounts.get(authority); if (!mount) { return true; }
+    await protectedEditor.freezeAll(authority);
+    try {
     if (protectedEditor.dirty(authority) || dirtyFor(authority).length || tabsFor(authority).some(tab => tab.isDirty)) {
         const choice = await vscode.window.showWarningMessage('Save vault changes before locking?', { modal: true }, 'Save and Lock');
         if (choice !== 'Save and Lock') { return false; }
@@ -203,7 +206,16 @@ async function lock(authority: string): Promise<boolean> {
     protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); updateStatus();
     try { await mount.client.request('lock', {}); } finally { mount.client.dispose(); }
     return true; // Keep the locked workspace URI: removing the first folder restarts the host.
+    } finally { if (mounts.get(authority) === mount) { protectedEditor.resumeAll(authority); } }
 }
+async function checkpointDisconnect(authority: string): Promise<void> {
+    const mount = mounts.get(authority); if (!mount) { return; }
+    try { await protectedEditor.checkpointAll(authority); }
+    catch { void vscode.window.showErrorMessage('Could not complete an encrypted draft before disconnect. The last completed drafts remain available through Recover Drafts.'); }
+    if (mounts.get(authority) !== mount) { return; }
+    protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
+}
+
 async function changePasswords(context: vscode.ExtensionContext): Promise<void> {
     const authority = await chooseAuthority(context, true); if (!authority) { return; }
     const mount = mounts.get(authority)!;
@@ -243,6 +255,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         try { await action(value); } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Vault operation failed.'); }
         finally { busy = false; updateStatus(); }
     }));
+    command('venc.recoverDrafts', async () => {
+        const authority = await chooseAuthority(context, true); if (!authority) { return; }
+        if (!mounts.get(authority)!.capabilities.includes('draftRecovery')) { throw new Error('Update the Rust core to support encrypted draft recovery.'); }
+        await recoverDrafts(provider, mounts.get(authority)!.root);
+    });
     command('venc.createVault', () => open(context, true));
     command('venc.unlockVault', async value => {
         const uri = selectedVault(value);
@@ -273,31 +290,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await context.globalState.update('vaultLocations', saved);
         void vscode.window.showInformationMessage('Remembered vault location removed. The encrypted vault is unchanged.');
     });
-    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async event => {
         if (event.affectsConfiguration('venc.allowPlaintextAccess')) {
-            for (const [authority, mount] of mounts) {
-                protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
+            for (const authority of mounts.keys()) {
+                await checkpointDisconnect(authority);
             }
             plaintextAccess = vscode.workspace.getConfiguration('venc').get<boolean>('allowPlaintextAccess', false) === true;
-            void vscode.window.showWarningMessage('Vaults locked after changing plaintext access; unbacked protected edits may be lost. Reopen to use the new mode. Compatibility mode exposes plaintext to editor backups and other extensions.');
+            void vscode.window.showWarningMessage('Vaults locked after changing plaintext access. Use Recover Drafts after unlocking to restore checkpointed edits. Reopen to use the new mode. Compatibility mode exposes plaintext to editor backups and other extensions.');
             updateStatus();
         }
         if (plaintextAccess && (event.affectsConfiguration('files.hotExit') || event.affectsConfiguration('workbench.localHistory.enabled'))) {
             for (const [authority, mount] of mounts) {
                 if (vscode.workspace.getConfiguration('files', mount.root).get('hotExit') !== 'off'
                     || vscode.workspace.getConfiguration('workbench.localHistory', mount.root).get('enabled') !== false) {
-                    protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
+                    await checkpointDisconnect(authority);
                     void vscode.window.showErrorMessage('Vault locked because Hot Exit or Local History was enabled. Editor buffers may still exist; restore the settings before reopening.');
                 }
             }
             updateStatus();
         }
-    }), vscode.workspace.onDidChangeWorkspaceFolders(() => {
-        for (const [authority, mount] of mounts) {
+    }), vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+        for (const authority of mounts.keys()) {
             if (!vscode.workspace.workspaceFolders?.some(folder => owned(folder.uri, authority))) {
                 const protectedDirty = protectedEditor.dirty(authority);
-                protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
-                if (protectedDirty) { void vscode.window.showWarningMessage('Protected editors closed after removing the vault folder. Changes since the last encrypted backup may be lost.'); }
+                await checkpointDisconnect(authority);
+                if (protectedDirty) { void vscode.window.showWarningMessage('Protected editors checkpointed after removing the vault folder. Unlock and use Recover Drafts to restore edits.'); }
                 if (dirtyFor(authority).length) { void vscode.window.showWarningMessage('Vault disconnected after removing its folder. Reopen it to save remaining editor buffers.'); }
             }
         }

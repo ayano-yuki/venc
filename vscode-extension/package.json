@@ -77,6 +77,12 @@
         "command": "venc.refreshVaults",
         "title": "venc: Refresh Vaults",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "venc.recoverDrafts",
+        "title": "venc: Recover Encrypted Drafts",
+        "icon": "$(history)",
+        "enablement": "venc.hasUnlockedVault"
       }
     ],
     "configuration": {
@@ -145,6 +151,11 @@
           "command": "venc.refreshVaults",
           "when": "view == venc.protectedFiles",
           "group": "navigation@4"
+        },
+        {
+          "command": "venc.recoverDrafts",
+          "when": "view == venc.protectedFiles && venc.hasUnlockedVault",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [

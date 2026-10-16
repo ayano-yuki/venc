@@ -228,10 +228,10 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     inputs.push('new-a', 'new-b');
     await handlers.get('venc.openVault')();
     assert.equal((await registered.stat(file)).size, 5);
-    configurationChanged({ affectsConfiguration: () => false });
+    await configurationChanged({ affectsConfiguration: () => false });
     assert.equal((await registered.stat(file)).size, 5);
     historyEnabled = true;
-    configurationChanged({ affectsConfiguration: key => key === 'workbench.localHistory.enabled' });
+    await configurationChanged({ affectsConfiguration: key => key === 'workbench.localHistory.enabled' });
     await assert.rejects(registered.stat(file), { code: 'Unavailable' });
     historyEnabled = false;
     // Allow EOF to release the old core's OS lock after emergency disconnect.
@@ -240,7 +240,7 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     await handlers.get('venc.openVault')();
     assert.equal((await registered.stat(file)).size, 5);
     folders.splice(1);
-    folderChanged();
+    await folderChanged();
     await assert.rejects(registered.stat(file), { code: 'Unavailable' });
     await handlers.get('venc.forgetVault')();
     assert.deepEqual(state.vaultLocations, {});
@@ -257,7 +257,7 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     compatibility = false;
     configuredBinary = binary;
     inputs.length = 0;
-    configurationChanged({ affectsConfiguration: key => key === 'venc.allowPlaintextAccess' });
+    await configurationChanged({ affectsConfiguration: key => key === 'venc.allowPlaintextAccess' });
     const errorsBefore = errors.length;
     inputs.push('vault-protected', 'a', 'b', 'a', 'b');
     await handlers.get('venc.createVault')();
@@ -388,9 +388,17 @@ test('protected editor: default deny, encrypted drafts, revision conflicts, Save
     let receive;
     let disposePanel;
     const posted = [];
+    let snapshotSequence = 100;
     const panel = { webview: { options: {}, html: '',
         onDidReceiveMessage(fn) { receive = fn; return new Disposable(() => {}); },
-        postMessage: async message => { posted.push(message); return true; } },
+        postMessage: async message => {
+            posted.push(message);
+            if (message.type === 'snapshot') {
+                const load = posted.findLast(m => m.type === 'load');
+                queueMicrotask(() => receive({ type: 'snapshot', request: message.request, text: doc.text, epoch: load.epoch, sequence: ++snapshotSequence }));
+            }
+            return true;
+        } },
         onDidDispose(fn) { disposePanel = fn; return new Disposable(() => {}); },
         dispose() { disposePanel?.(); } };
     editor.resolveCustomEditor(doc, panel);
@@ -426,6 +434,12 @@ test('protected editor: default deny, encrypted drafts, revision conflicts, Save
     await editor.saveCustomDocument(restored, token);
     assert.equal(restored.dirty, false);
     assert.equal((await provider.readDocument(file)).text, expected);
+    const drafts = await provider.listBackups(root);
+    assert(drafts.entries.some(item => backup.id.endsWith(item.id)));
+    const recoveredUri = file.with({ path: '/Recovered/copy.txt' });
+    await provider.recoverBackup(recoveredUri, backup.id.split(':')[1]);
+    assert.equal((await provider.readDocument(recoveredUri)).text, expected);
+    await assert.rejects(provider.recoverBackup(file, backup.id.split(':')[1]));
     // A restored stale backup must not overwrite a later saved revision.
     restored.dispose();
     const stale = await editor.openCustomDocument(file, { backupId: backup.id }, token);
@@ -435,7 +449,17 @@ test('protected editor: default deny, encrypted drafts, revision conflicts, Save
     assert.equal((await provider.readDocument(file)).text, expected);
     await editor.revertCustomDocument(stale, token);
     assert.equal(stale.dirty, false);
+    editor.update(stale, 'checkpointed before disconnect');
+    await editor.checkpointAll(root.authority);
+    assert.equal(stale.frozen, true);
     editor.revoke(root.authority);
+    const checkpointed = await provider.listBackups(root);
+    assert(checkpointed.entries.length >= 1);
+    let foundCheckpoint = false;
+    for (const draft of checkpointed.entries) {
+        if ((await provider.readDocument(file, draft.id)).text === 'checkpointed before disconnect') { foundCheckpoint = true; }
+    }
+    assert(foundCheckpoint, 'Encrypted checkpoint survives disposal independently of VS Code backup IDs');
     assert.equal(stale.text, '');
     assert.equal(stale.active, false);
     await assert.rejects(editor.saveCustomDocument(stale, token), { code: 'Unavailable' });

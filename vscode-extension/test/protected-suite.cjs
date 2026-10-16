@@ -49,7 +49,7 @@ exports.run = async () => {
         // The test does not simulate typing, but it exercises renderer persistence.
         for (const panel of doc.panels) {
             assert.equal(panel.webview.html.includes(secret), false);
-            await panel.webview.postMessage({ type: 'load', text: secret, dirty: true, epoch: 777 });
+            editor.refreshers.get(panel)?.();
         }
         if (process.env.VENC_PROBE_BACKUPS === '1') {
             // Wait for VS Code's actual working-copy backup tracker, not a direct API call.
