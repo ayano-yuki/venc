@@ -6,6 +6,7 @@ import { constants } from 'node:fs';
 import { CoreClient } from './coreClient';
 import { VaultProvider, SCHEME } from './vaultProvider';
 import { ProtectedEditor, PROTECTED_EDITOR } from './protectedEditor';
+import { showStorage } from './storageView';
 import { VaultImporter } from './importFiles';
 import { VaultActions } from './vaultActions';
 import { recoverDrafts } from './recovery';
@@ -304,6 +305,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     command('venc.newFolder', value => actions.create(value, true));
     command('venc.renameEntry', value => actions.rename(value));
     command('venc.deleteEntry', value => actions.delete(value));
+    command('venc.showStorage', async () => {
+        const authority = await chooseAuthority(context, true); if (!authority) { return; }
+        if (!mounts.get(authority)!.capabilities.includes('storageManagement')) { throw new Error('Update the Rust core to support storage management.'); }
+        await showStorage(provider, mounts.get(authority)!.root);
+    });
     command('venc.recoverDrafts', async () => {
         const authority = await chooseAuthority(context, true); if (!authority) { return; }
         if (!mounts.get(authority)!.capabilities.includes('draftRecovery')) { throw new Error('Update the Rust core to support encrypted draft recovery.'); }

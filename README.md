@@ -120,12 +120,12 @@ Writes sync a new immutable encrypted object before atomically replacing encrypt
 Unix builds also sync directories and create files with mode 0600 and directories with mode 0700.
 A commit error locks the session to prevent further writes from stale in-memory state. Power-loss guarantees still depend on the OS/filesystem and have not been exhaustively tested.
 
-Replaced/deleted objects and orphan encrypted drafts can remain; encrypted draft enumeration/recovery is available through Recover Encrypted Drafts; garbage collection is not yet implemented. An unexpected disconnect closes protected panels and can lose changes since the last completed encrypted backup.
+Replaced/deleted objects and orphan encrypted drafts can remain; encrypted draft enumeration/recovery is available through Recover Encrypted Drafts; Vault Storage and Cleanup reclaims unreferenced objects older than 24 hours while retaining drafts and unrecognized files. An unexpected disconnect closes protected panels and can lose changes since the last completed encrypted backup.
 Initialization failures can leave an incomplete new directory. Do not reuse it automatically or treat it as a completed vault.
 
 ## Remaining limits
 
-This is an unaudited prototype. Recovery keys, chunk encryption, recursive folder import, automatic garbage collection, and rollback detection are not implemented.
+This is an unaudited prototype. Recovery keys, chunk encryption, recursive folder import, and rollback detection are not implemented.
 Losing either password prevents recovery. Changing passwords does not revoke old snapshots containing the same master key.
 Object counts, sizes, and filesystem times remain visible. VS Code profile records can reveal document paths and vault locations. OS swap, crash dumps, clipboard, a compromised host, and prior copies can retain plaintext. Native editor backups, language servers, and Save As expose plaintext when compatibility access is explicitly enabled.
 Path checks reject symlinks in vault objects but do not fully prevent a hostile local process racing filesystem changes.

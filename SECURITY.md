@@ -41,7 +41,7 @@ These are implemented and locally tested controls, not an independent security c
 | Metadata side channels | Object counts, ciphertext sizes, and host filesystem times remain observable. |
 | Incomplete initialization | Failed initialization can leave a new incomplete directory; existing directories are never overwritten. |
 | Crash/power loss | Commit ordering and directory sync are tested at the API level; exhaustive power-loss and platform filesystem testing is pending. Unix permission/sync behavior is not a Windows guarantee. |
-| Storage growth | Orphan encrypted drafts and replaced/deleted encrypted objects remain to avoid unsafe deletion before commit. Crash-safe garbage collection is pending. |
+| Storage growth | Orphan encrypted drafts and replaced/deleted encrypted objects remain to avoid unsafe deletion before commit. Explicit, batched cleanup verifies authenticated on-disk metadata and durable references before unlinking unreferenced objects older than 24 hours. Drafts and unknown files are excluded. |
 | Large files | Files are bounded at 16 MiB. Authenticated chunk encryption and streaming are pending. |
 | Compatibility | Prototype v1 metadata has evolved; current readers accept early metadata, old binaries may reject updates. Stable versioning and migration are pending. |
 | Audit | Independent review, fuzzing, systematic fault injection, and broader platform validation remain necessary. |

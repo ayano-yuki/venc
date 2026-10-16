@@ -47,7 +47,7 @@ fn dispatch(request: &Request, session: &mut Option<Session>) -> Result<Value> {
     match request.method.as_str() {
         "hello" => {
             return Ok(
-                json!({"protocol":1,"capabilities":["changePasswords","protectedEditor","draftRecovery"]}),
+                json!({"protocol":1,"capabilities":["changePasswords","protectedEditor","draftRecovery","storageManagement"]}),
             )
         }
         "init" | "unlock" => {
@@ -60,7 +60,7 @@ fn dispatch(request: &Request, session: &mut Option<Session>) -> Result<Value> {
             } else {
                 Session::unlock(path, a, b)?
             };
-            let result = json!({ "vaultId": opened.vault_id(), "protocol": 1, "capabilities": ["changePasswords","protectedEditor","draftRecovery"] });
+            let result = json!({ "vaultId": opened.vault_id(), "protocol": 1, "capabilities": ["changePasswords","protectedEditor","draftRecovery","storageManagement"] });
             *session = Some(opened);
             return Ok(result);
         }
@@ -108,6 +108,8 @@ fn dispatch(request: &Request, session: &mut Option<Session>) -> Result<Value> {
                 json!({"backup": s.create_backup(text(p, "path")?, text(p, "revision")?, &plain)?})
             }
         }
+        "storageInfo" => serde_json::to_value(s.storage_info()?)?,
+        "collectGarbage" => serde_json::to_value(s.collect_garbage()?)?,
         "listBackups" => serde_json::to_value(s.list_backups(text(p, "after")?)?)?,
         "recoverBackup" => {
             s.recover_backup(text(p, "backup")?, text(p, "path")?)?;

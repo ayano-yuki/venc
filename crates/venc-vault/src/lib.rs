@@ -1,5 +1,6 @@
 mod filesystem;
 mod protected;
+mod storage;
 use anyhow::{bail, ensure, Context, Result};
 pub use filesystem::{FsError, Stat};
 use fs2::FileExt;
@@ -11,6 +12,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
+pub use storage::{Collection, StorageInfo};
 use venc_crypto::{expand, new_key, open, open_key, random, seal, Kdf, Key, Sealed};
 use zeroize::{Zeroize, Zeroizing};
 

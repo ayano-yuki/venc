@@ -117,6 +117,12 @@
         "command": "venc.importFiles",
         "title": "venc: Import Files",
         "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "venc.showStorage",
+        "title": "venc: Vault Storage and Cleanup",
+        "icon": "$(database)",
+        "enablement": "venc.hasUnlockedVault"
       }
     ],
     "configuration": {
@@ -210,6 +216,11 @@
           "command": "venc.importFiles",
           "when": "view == venc.protectedFiles && venc.hasUnlockedVault",
           "group": "navigation@8"
+        },
+        {
+          "command": "venc.showStorage",
+          "when": "view == venc.protectedFiles && venc.hasUnlockedVault",
+          "group": "maintenance"
         }
       ],
       "view/item/context": [

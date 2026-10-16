@@ -4,6 +4,7 @@ import { CoreConnection, CoreError } from './coreClient';
 export const SCHEME = 'venc';
 export interface BackupInfo { id: string; path: string; size: number; modified: number }
 export interface BackupPage { entries: BackupInfo[]; next: string | null; invalid: number }
+export interface StorageInfo { total_bytes: number; live_bytes: number; backup_bytes: number; reclaimable_bytes: number; recent_retired_bytes: number; unknown_bytes: number; reclaimable_files: number; missing_live_files: number }
 interface CoreStat { kind: 'file' | 'directory'; size: number; ctime: number; mtime: number }
 export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposable {
     constructor(private readonly scheme = SCHEME, private readonly allowPlaintext = () => false) {}
@@ -137,6 +138,20 @@ export class VaultProvider implements vscode.FileSystemProvider, vscode.Disposab
     async recoverBackup(target: vscode.Uri, backup: string): Promise<void> {
         await this.call(target, 'recoverBackup', { backup });
         this.changed(target, vscode.FileChangeType.Created);
+    }
+    async storageInfo(root: vscode.Uri): Promise<StorageInfo> {
+        const info = await this.call<StorageInfo>(root, 'storageInfo');
+        this.validateStorage(root, info); return info;
+    }
+    private validateStorage(root: vscode.Uri, info: StorageInfo): void {
+        const keys: (keyof StorageInfo)[] = ['total_bytes', 'live_bytes', 'backup_bytes', 'reclaimable_bytes', 'recent_retired_bytes', 'unknown_bytes', 'reclaimable_files', 'missing_live_files'];
+        if (!info || keys.some(key => !Number.isSafeInteger(info[key]) || info[key] < 0)) { this.invalid(root); }
+    }
+    async collectGarbage(root: vscode.Uri): Promise<{ removed_files: number; removed_bytes: number; remaining: StorageInfo }> {
+        const result = await this.call<{ removed_files: number; removed_bytes: number; remaining: StorageInfo }>(root, 'collectGarbage');
+        if (!result || !Number.isSafeInteger(result.removed_files) || result.removed_files < 0 || result.removed_files > 1000
+            || !Number.isSafeInteger(result.removed_bytes) || result.removed_bytes < 0) { this.invalid(root); }
+        this.validateStorage(root, result.remaining); return result;
     }
     private changed(uri: vscode.Uri, type: vscode.FileChangeType): void {
         const parent = uri.with({ path: uri.path.slice(0, uri.path.lastIndexOf('/')) || '/' });

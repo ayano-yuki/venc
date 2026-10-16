@@ -49,7 +49,7 @@ File/folder creation and rename/delete are available directly in the venc sideba
 The status bar shows open/locked counts. A cancelled lock, failed save, or cancelled close leaves the session open.
 Saving checks the file's immutable object revision. A conflict or edits arriving during a save leave the document dirty.
 
-Removing a workspace folder, changing access mode, or losing the core connection revokes access and closes protected panels, releasing their content references. **Changes since the last completed encrypted backup can be lost during an unexpected disconnect.** Encrypted orphan drafts may remain; Recover Encrypted Drafts can restore them as new encrypted files; garbage collection is not yet implemented.
+Removing a workspace folder, changing access mode, or losing the core connection revokes access and closes protected panels, releasing their content references. **Changes since the last completed encrypted backup can be lost during an unexpected disconnect.** Encrypted orphan drafts may remain; Recover Encrypted Drafts can restore them as new encrypted files; Vault Storage and Cleanup reclaims unreferenced objects older than 24 hours while retaining drafts and unrecognized files.
 Normal locking saves before closing. Locking is not secure erasure of renderer/JavaScript/OS memory.
 
 Changing passwords rewraps the same master key. Old vault snapshots still work with their old passwords; neither current file data nor encrypted drafts are re-encrypted.

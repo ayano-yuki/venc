@@ -552,3 +552,24 @@ test('file import encrypts bytes, retains source, refuses overwrite/oversize, an
         assert.equal((await fs.readFile(path.join(temp, 'vault', 'objects', entry))).includes(original), false);
     }
 });
+
+test('storage RPC reclaims only aged unreferenced objects and keeps drafts and current files', async t => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-storage-'));
+    const client = new CoreClient(binary), provider = new VaultProvider();
+    const opened = await client.request('init', { vault: path.join(temp, 'vault'), passwordA: 'a', passwordB: 'b' });
+    const root = provider.mount(opened.vaultId, client), file = Uri.joinPath(root, 'note');
+    t.after(async () => { provider.dispose(); client.dispose(); await fs.rm(temp, { recursive: true, force: true }); });
+    await provider.importFile(file, Buffer.from('old'));
+    const old = await provider.readDocument(file);
+    const backup = await provider.createBackup(file, 'unsaved', old.revision);
+    await provider.writeDocument(file, 'current', old.revision);
+    const object = path.join(temp, 'vault', 'objects', old.revision + '.enc');
+    await fs.utimes(object, new Date(1000), new Date(1000));
+    const info = await provider.storageInfo(root);
+    assert.equal(info.reclaimable_files, 1);
+    const collected = await provider.collectGarbage(root);
+    assert.equal(collected.removed_files, 1);
+    assert.equal(collected.remaining.reclaimable_files, 0);
+    assert.equal((await provider.readDocument(file)).text, 'current');
+    assert.equal((await provider.readDocument(file, backup)).text, 'unsaved');
+});
