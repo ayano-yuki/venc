@@ -1,0 +1,5 @@
+body{margin:0;padding:12px;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}
+textarea{box-sizing:border-box;width:100%;height:calc(100vh - 125px);resize:none;color:inherit;background:inherit;border:1px solid var(--vscode-input-border);font-family:var(--vscode-editor-font-family);font-size:var(--vscode-editor-font-size);white-space:pre;tab-size:4}
+p{margin:0 0 10px}#status{font-size:12px}button,input,select{font:inherit;color:var(--vscode-input-foreground);background:var(--vscode-input-background);border:1px solid var(--vscode-input-border);padding:4px;margin:2px}
+button{cursor:pointer;background:var(--vscode-button-background);color:var(--vscode-button-foreground)}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:1px solid var(--vscode-focusBorder)}
+#toolbar,#search{margin-bottom:8px}#search[hidden]{display:none}#query,#replacement{max-width:24%;min-width:85px}

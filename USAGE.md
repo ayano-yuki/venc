@@ -110,6 +110,7 @@ Explorer でファイルを右クリックして **venc: Open in Protected Edito
 **Save As（名前を付けて保存）は保護エディタでは使えません。** 名前を変える場合は、次の「名前変更・削除」を使います。
 
 保護エディタの対象は **16 MiB 以下の UTF-8 テキスト**です。画像・PDF・Office 文書・不正な UTF-8 は開けません。
+Ctrl/Cmd+F で検索、Ctrl/Cmd+H で置換、Ctrl/Cmd+Z と Shift+Ctrl/Cmd+Z で Undo/Redo、Tab でタブ文字を入力できます。上部で LF/CRLF を明示的に選択できます。
 構文色分け、言語サーバー、ノートブック、Vault 全体の検索は提供しません。
 通常エディタの使用が必要な場合は、末尾の「互換モード」を確認してください。
 
@@ -173,7 +174,7 @@ Explorer でファイルを右クリックして **venc: Open in Protected Edito
 ### 標準エディタを使いたい場合
 
 既定は `venc.allowPlaintextAccess: false` の保護モードです。
-標準エディタへの読み出しを許可する場合は、**先に保存してロック**し、設定画面で `venc.allowPlaintextAccess` を検索して有効にした後、Vault を開き直します。
+標準エディタへの読み出しを許可する場合は、**先に保存してロック**し、`venc: Choose Editor Mode` で Standard editor (compatibility) を選び、平文アクセスの条件に同意してから Vault を開き直します。設定画面の `venc.allowPlaintextAccess` でも切り替えられます。
 開く際にはリスクの確認と、Hot Exit / Local History を無効にする設定が必要です。変更は同じプロファイルの他ファイルにも影響します。
 
 **互換モードでは標準エディタや他拡張に平文を渡し、Hot Exit 無効でも平文バックアップが作られ得ます。** 保護モードに戻しても過去の平文コピーは消えません。

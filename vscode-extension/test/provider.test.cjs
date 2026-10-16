@@ -382,6 +382,9 @@ test('protected editor: default deny, encrypted drafts, revision conflicts, Save
     editor.onDidChangeCustomDocument(event => changes.push(event));
     editor.update(doc, 'secret </script><script>leak()</script> 日本語\r\n');
     assert.equal(changes.length, 1);
+    const firstText = doc.text;
+    await changes[0].undo(); assert.equal(doc.text, '');
+    await changes[0].redo(); assert.equal(doc.text, firstText);
     await assert.rejects(editor.saveCustomDocumentAs(doc, Uri.file(path.join(temp, 'export.txt')), token), { code: 'NoPermissions' });
     assert.equal(await fs.access(path.join(temp, 'export.txt')).then(() => true, () => false), false);
     provider.guardMutation = uri => editor.guardMutation(uri);
@@ -502,4 +505,17 @@ test('sidebar actions create and open encrypted files, reject traversal/collisio
     consent = 'Delete'; await actions.delete({ uri: renamed });
     await assert.rejects(provider.stat(renamed), { code: 'FileNotFound' });
     await assert.rejects(actions.delete(root));
+});
+
+
+test('text model preserves BOM and CRLF/mixed endings and reversible edits', () => {
+    const { difference, applyPatch, fromRenderer } = require('../dist/textModel');
+    const original = '\uFEFFfirst\r\nsecond\r\n';
+    assert.equal(fromRenderer(original, '\uFEFFfirst\nsecond\n', '\r\n'), original);
+    const changed = fromRenderer(original, '\uFEFFfirst\nsecond!\n', '\r\n');
+    assert.equal(changed, '\uFEFFfirst\r\nsecond!\r\n');
+    const patch = difference(original, changed);
+    assert.equal(applyPatch(original, patch, false), changed);
+    assert.equal(applyPatch(changed, patch, true), original);
+    assert.equal(fromRenderer('a\r\nb\nc\r\n', 'a\nb!\nc\n', '\r\n'), 'a\r\nb!\nc\r\n');
 });

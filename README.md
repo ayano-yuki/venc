@@ -132,3 +132,5 @@ Path checks reject symlinks in vault objects but do not fully prevent a hostile 
 Use trusted host storage and independent encrypted backups; see [SECURITY.md](SECURITY.md) for exact guarantees and open work.
 
 API references: [RustCrypto Argon2](https://docs.rs/argon2/0.5.3/argon2/), [RustCrypto XChaCha20-Poly1305](https://docs.rs/chacha20poly1305/0.10.1/chacha20poly1305/).
+
+Choose **venc: Choose Editor Mode** to select protected or standard editing. Mode changes save and lock vaults first; standard editing requires explicit consent to plaintext access and backup risks.

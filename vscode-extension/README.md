@@ -19,8 +19,8 @@ This closes the standard editor's plaintext backup path. It does not isolate pla
 5. Edit UTF-8 text and press Ctrl/Cmd+S. Each file is limited to 16 MiB. Binary files and malformed UTF-8 are refused without changing the file.
 
 Ordinary Explorer double-click and text-based extensions cannot read vault contents in protected mode. Use the dedicated view or context command.
-The protected editor has a plain textarea with native text undo; it does not provide language servers, notebooks, syntax highlighting, whole-vault search, import, or plaintext export.
-BOMs and line endings are preserved when loading/saving the document model; browser textarea input normalizes CRLF to LF when the user edits.
+The protected editor supports literal find/replace (Ctrl/Cmd+F or H), VS Code Undo/Redo, Tab insertion, and explicit LF/CRLF selection. Undo text is bounded to 32 MiB and released on close. It does not provide language servers, notebooks, syntax highlighting, whole-vault search, or plaintext export.
+BOMs and existing LF/CRLF endings are preserved across textarea edits; the line-ending selector performs explicit conversion.
 Save and close protected documents before renaming/deleting them or their parent folders.
 
 Adding the first workspace folder can restart the extension host. Run **Open Vault** again after the restart. Passwords and keys are never restored automatically.
@@ -90,3 +90,5 @@ The packaging script builds the current-host core, atomically stages it in `bin/
 Linux static builds require static libraries and `RUSTFLAGS="-C target-feature=+crt-static"`. Local validation is Linux x64; other platforms and an independent security audit remain pending.
 
 References: [VS Code Tree View and Activity Bar containers](https://code.visualstudio.com/api/extension-guides/tree-view), [VS Code custom editors](https://code.visualstudio.com/api/extension-guides/custom-editors), [CustomEditorProvider API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider).
+
+Choose **venc: Choose Editor Mode** to select protected or standard editing. Mode changes save and lock vaults first; standard editing requires explicit consent to plaintext access and backup risks.

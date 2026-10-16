@@ -103,6 +103,15 @@
         "command": "venc.deleteEntry",
         "title": "venc: Delete Vault Entry",
         "icon": "$(trash)"
+      },
+      {
+        "command": "venc.openVaultFile",
+        "title": "venc: Open Vault File"
+      },
+      {
+        "command": "venc.selectEditorMode",
+        "title": "venc: Choose Editor Mode",
+        "icon": "$(settings-gear)"
       }
     ],
     "configuration": {
@@ -186,6 +195,11 @@
           "command": "venc.newFolder",
           "when": "view == venc.protectedFiles && venc.hasUnlockedVault",
           "group": "navigation@7"
+        },
+        {
+          "command": "venc.selectEditorMode",
+          "when": "view == venc.protectedFiles",
+          "group": "mode"
         }
       ],
       "view/item/context": [

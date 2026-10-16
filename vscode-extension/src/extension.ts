@@ -62,7 +62,7 @@ function selectedVault(value: unknown): vscode.Uri {
 function updateStatus(): void {
     const locked = vaultRoots().filter(root => root.locked).length;
     status.text = busy ? '$(sync~spin) venc' : `$(lock) venc: ${mounts.size} open${locked ? ` / ${locked} locked` : ''}`;
-    status.tooltip = busy ? 'Vault operation in progress' : 'Manage encrypted vaults. Use Protected Files to edit with encrypted backups.';
+    status.tooltip = busy ? 'Vault operation in progress' : `Editor mode: ${plaintextAccess ? 'Standard (compatibility; plaintext access allowed)' : 'Protected (encrypted drafts)'}. Click to manage vaults.`;
     protectedFiles?.refresh();
     status.command = mounts.size ? 'venc.lockVault' : 'venc.openVault';
     status.show();
@@ -262,6 +262,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(protectedEditor, protectedFiles,
         vscode.window.registerCustomEditorProvider(PROTECTED_EDITOR, protectedEditor, { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } }),
         vscode.window.createTreeView('venc.protectedFiles', { treeDataProvider: protectedFiles }),
+        vscode.commands.registerCommand('venc.openVaultFile', async (uri?: vscode.Uri) => {
+            try {
+                if (!uri || uri.scheme !== SCHEME) { throw new Error('Choose a vault file.'); }
+                await vscode.commands.executeCommand(plaintextAccess ? 'vscode.open' : 'vscode.openWith', uri, ...(plaintextAccess ? [] : [PROTECTED_EDITOR]));
+            } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Cannot open vault file.'); }
+        }),
         vscode.commands.registerCommand('venc.openProtectedFile', async (uri?: vscode.Uri) => {
             try {
                 if (!uri || uri.scheme !== SCHEME) { throw new Error('Choose a file in the Protected Files view or the vault Explorer context menu.'); }
@@ -279,7 +285,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }));
     const actions = new VaultActions(provider, async () => {
         const authority = await chooseAuthority(context, true); return authority ? mounts.get(authority)?.root : undefined;
-    }, async uri => { await vscode.commands.executeCommand('vscode.openWith', uri, PROTECTED_EDITOR); }, closeForMutation);
+    }, async uri => { await vscode.commands.executeCommand(plaintextAccess ? 'vscode.open' : 'vscode.openWith', uri, ...(plaintextAccess ? [] : [PROTECTED_EDITOR])); }, closeForMutation);
+    command('venc.selectEditorMode', async () => {
+        const mode = await vscode.window.showQuickPick([
+            { label: 'Protected editor', description: 'Encrypted drafts; no standard text model or plaintext filesystem reads', plaintext: false },
+            { label: 'Standard editor (compatibility)', description: 'Native editor features; plaintext backups and access by other extensions are possible', plaintext: true },
+        ], { placeHolder: `Current mode: ${plaintextAccess ? 'Standard editor (compatibility)' : 'Protected editor'}` });
+        if (!mode || mode.plaintext === plaintextAccess) { return; }
+        if (mode.plaintext && await vscode.window.showWarningMessage('Compatibility mode permits plaintext access by the standard editor and other extensions, and plaintext crash backups. Enable it?', { modal: true }, 'Enable Compatibility') !== 'Enable Compatibility') { return; }
+        for (const authority of [...mounts.keys()]) { if (!await lock(authority)) { return; } }
+        await vscode.workspace.getConfiguration('venc').update('allowPlaintextAccess', mode.plaintext, vscode.ConfigurationTarget.Global);
+        void vscode.window.showInformationMessage('Editor mode changed. Unlock a vault to continue.');
+    });
     command('venc.newFile', value => actions.create(value, false));
     command('venc.newFolder', value => actions.create(value, true));
     command('venc.renameEntry', value => actions.rename(value));

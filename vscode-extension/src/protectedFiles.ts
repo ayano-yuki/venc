@@ -23,7 +23,7 @@ export class ProtectedFiles implements vscode.TreeDataProvider<Node>, vscode.Dis
             if (node.locked) { item.command = { command: 'venc.unlockVault', title: 'Unlock Vault', arguments: [node.uri] }; }
         } else {
             item.contextValue = node.directory ? 'vencDirectory' : 'vencFile';
-            if (!node.directory) { item.command = { command: 'venc.openProtectedFile', title: 'Open in Protected Editor', arguments: [node.uri] }; }
+            if (!node.directory) { item.command = { command: 'venc.openVaultFile', title: 'Open in Protected Editor', arguments: [node.uri] }; }
         }
         return item;
     }

@@ -1,5 +1,10 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import { TextPatch, difference, applyPatch, preferredEol, normalizeEol, fromRenderer } from './textModel';
+const script = readFileSync(path.join(__dirname, '../media/editor.js'), 'utf8');
+const styles = readFileSync(path.join(__dirname, '../media/editor.css'), 'utf8');
 import { DraftJournal } from './draftJournal';
 import { VaultProvider, SCHEME } from './vaultProvider';
 
@@ -13,18 +18,24 @@ export class ProtectedDocument implements vscode.CustomDocument {
     saving = false;
     frozen = false;
     journal?: DraftJournal;
+    savedText: string;
+    eol: '\n' | '\r\n';
+    readonly edits: TextPatch[] = [];
+    historyBytes = 0;
     constructor(readonly uri: vscode.Uri, public text: string, public revision: string, restored: boolean,
-        private readonly remove: () => void) { this.dirty = restored; }
+        private readonly remove: () => void) { this.dirty = restored; this.savedText = text; this.eol = preferredEol(text); }
     dispose(): void {
         if (!this.active) { return; }
         this.journal?.dispose();
-        this.active = false; this.text = ''; this.revision = '';
+        this.active = false; this.text = ''; this.savedText = ''; this.revision = '';
+        for (const edit of this.edits) { edit.removed = ''; edit.inserted = ''; edit.released = true; }
+        this.edits.length = 0;
         for (const panel of this.panels) { void panel.webview.postMessage({ type: 'clear' }); panel.dispose(); }
         this.panels.clear(); this.remove();
     }
 }
 export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDocument>, vscode.Disposable {
-    private readonly events = new vscode.EventEmitter<vscode.CustomDocumentContentChangeEvent<ProtectedDocument>>();
+    private readonly events = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<ProtectedDocument>>();
     readonly onDidChangeCustomDocument = this.events.event;
     readonly documents = new Map<string, ProtectedDocument>();
     constructor(private readonly provider: VaultProvider, private readonly scheme = SCHEME) {}
@@ -56,6 +67,10 @@ export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDoc
         const doc = new ProtectedDocument(uri, snapshot.text, snapshot.revision, !!backup, () => {
             if (this.documents.get(uri.toString()) === doc) { this.documents.delete(uri.toString()); }
         });
+        if (backup) {
+            try { doc.savedText = (await this.provider.readDocument(uri)).text; }
+            catch (error) { if (!(error instanceof vscode.FileSystemError) || error.code !== 'FileNotFound') { throw error; } doc.savedText = ''; }
+        }
         doc.journal = new DraftJournal(this.provider, uri, () => ({ text: doc.text, revision: doc.revision, dirty: doc.dirty }));
         this.documents.set(uri.toString(), doc);
         return doc;
@@ -68,8 +83,17 @@ export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDoc
             throw vscode.FileSystemError.NoPermissions('Text must be UTF-8, without NUL bytes, and at most 16 MiB.');
         }
         if (doc.text === text) { return; }
-        doc.text = text; doc.version++; doc.dirty = true;
-        this.events.fire({ document: doc });
+        const before = doc.text;
+        doc.text = text; doc.version++; doc.dirty = text !== doc.savedText;
+        const edit = difference(before, text);
+        doc.edits.push(edit); doc.historyBytes += Buffer.byteLength(edit.removed) + Buffer.byteLength(edit.inserted);
+        while (doc.historyBytes > 32 * 1024 * 1024 && doc.edits.length > 1) {
+            const oldest = doc.edits.shift()!;
+            doc.historyBytes -= Buffer.byteLength(oldest.removed) + Buffer.byteLength(oldest.inserted);
+            oldest.removed = ''; oldest.inserted = ''; oldest.released = true;
+        }
+        this.events.fire({ document: doc, label: 'Edit encrypted document',
+            undo: () => this.history(doc, edit, true), redo: () => this.history(doc, edit, false) });
         doc.journal?.schedule();
     }
     resolveCustomEditor(doc: ProtectedDocument, panel: vscode.WebviewPanel): void {
@@ -78,36 +102,38 @@ export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDoc
         const nonce = randomBytes(24).toString('base64');
         panel.webview.html = `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; form-action 'none'; base-uri 'none';">
-<style nonce="${nonce}">body{margin:0;padding:12px;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}textarea{box-sizing:border-box;width:100%;height:calc(100vh - 65px);resize:none;color:inherit;background:inherit;border:1px solid var(--vscode-input-border);font-family:var(--vscode-editor-font-family);font-size:var(--vscode-editor-font-size);white-space:pre;tab-size:4}p{margin:0 0 10px}#status{font-size:12px}</style></head>
-<body><p>Protected UTF-8 editor · Ctrl/Cmd+S to save · backups are encrypted</p><textarea id="text" spellcheck="false" aria-label="Vault document" disabled></textarea><p id="status" role="status">Loading…</p>
-<script nonce="${nonce}">
-const api=acquireVsCodeApi(),text=document.getElementById('text'),status=document.getElementById('status');
-let sequence=0,epoch=0,accepted='';
-window.addEventListener('message',event=>{const m=event.data;if(m.type==='load'){epoch=m.epoch;sequence=0;text.value=m.text;accepted=m.text;text.disabled=false;status.textContent=m.dirty?'Unsaved changes':'Saved';}else if(m.type==='status'){status.textContent=m.message;}else if(m.type==='snapshot'){if(m.freeze){text.disabled=true;}api.postMessage({type:'snapshot',request:m.request,text:text.value,epoch,sequence:++sequence});}else if(m.type==='resume'){text.disabled=false;}else if(m.type==='clear'){text.value='';accepted='';text.disabled=true;status.textContent='Vault locked';}});
-text.addEventListener('input',()=>{if(new TextEncoder().encode(text.value).length>16777216){text.value=accepted;status.textContent='Edit rejected: file exceeds 16 MiB.';return;}accepted=text.value;api.postMessage({type:'edit',text:text.value,epoch,sequence:++sequence});status.textContent='Unsaved changes';});
-text.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();api.postMessage({type:'save'});}});
-api.postMessage({type:'ready'});
-</script></body></html>`;
+<style nonce="${nonce}">${styles}</style></head>
+<body><div id="toolbar">Protected UTF-8 editor · encrypted backups <button id="save">Save</button><label>Line endings <select id="eol"><option>LF</option><option>CRLF</option></select></label></div>
+<div id="search" hidden><input id="query" aria-label="Find text" placeholder="Find"><input id="replacement" aria-label="Replacement text" placeholder="Replace with"><label><input id="match-case" type="checkbox">Match case</label><button id="find-next">Next</button><button id="replace">Replace</button><button id="replace-all">Replace All</button><button id="close-search" aria-label="Close search">Close</button></div>
+<textarea id="text" spellcheck="false" aria-label="Vault document" disabled></textarea><p id="status" role="status">Loading…</p>
+<script nonce="${nonce}">${script}</script></body></html>`;
         let sequence = 0;
         let epoch = 0;
         let ready = false;
-        const send = () => { sequence = 0; epoch++; void panel.webview.postMessage({ type: 'load', text: doc.text, dirty: doc.dirty, epoch }); };
+        const send = () => { sequence = 0; epoch++; void panel.webview.postMessage({ type: 'load', text: doc.text, dirty: doc.dirty, epoch, frozen: doc.frozen, eol: doc.eol === '\r\n' ? 'CRLF' : 'LF' }); };
         const listener = panel.webview.onDidReceiveMessage(async (message: unknown) => {
             if (!doc.active || !message || typeof message !== 'object') { return; }
             const m = message as Record<string, unknown>;
             try {
                 if (m.type === 'ready') { ready = true; send(); }
                 else if (m.type === 'edit' && m.epoch === epoch && Number.isSafeInteger(m.sequence) && (m.sequence as number) > sequence && typeof m.text === 'string') {
-                    this.update(doc, m.text); sequence = m.sequence as number;
+                    this.update(doc, fromRenderer(doc.text, m.text, doc.eol)); sequence = m.sequence as number;
                 } else if (m.type === 'snapshot' && typeof m.request === 'string' && m.epoch === epoch && typeof m.text === 'string'
                     && Number.isSafeInteger(m.sequence) && (m.sequence as number) > sequence) {
                     const pending = this.snapshots.get(m.request);
                     if (pending?.doc === doc) {
-                        if (m.text !== doc.text) { this.update(doc, m.text); }
+                        const text = fromRenderer(doc.text, m.text, doc.eol);
+                        if (text !== doc.text) { this.update(doc, text); }
                         sequence = m.sequence as number;
                         doc.frozen = doc.frozen || pending.freeze;
                         clearTimeout(pending.timer); this.snapshots.delete(m.request); pending.resolve();
                     }
+                } else if (m.type === 'eol' && (m.value === 'LF' || m.value === 'CRLF')) {
+                    await this.flush(doc);
+                    const eol = m.value === 'CRLF' ? '\r\n' : '\n';
+                    this.update(doc, normalizeEol(doc.text).replace(/\n/g, eol)); doc.eol = eol; this.refresh(doc);
+                } else if (m.type === 'undo' || m.type === 'redo') {
+                    await this.flush(doc); await this.focus(doc); await vscode.commands.executeCommand(m.type);
                 } else if (m.type === 'save') { await this.saveViaWorkbench(doc); }
             } catch (error) {
                 void panel.webview.postMessage({ type: 'status', message: error instanceof Error ? error.message : 'Operation failed' });
@@ -118,6 +144,18 @@ api.postMessage({type:'ready'});
         this.refreshers.set(panel, send);
         this.renderers.set(panel, { ready: () => ready, doc });
         panel.onDidDispose(() => { this.refreshers.delete(panel); this.renderers.delete(panel); });
+    }
+    private history(doc: ProtectedDocument, edit: TextPatch, reverse: boolean): void {
+        this.check(doc);
+        if (doc.frozen) { throw new Error('Editing is paused while closing.'); }
+        doc.text = applyPatch(doc.text, edit, reverse); doc.version++; doc.dirty = doc.text !== doc.savedText;
+        doc.eol = preferredEol(doc.text); doc.journal?.schedule(); this.refresh(doc);
+    }
+    private refresh(doc: ProtectedDocument): void { for (const panel of doc.panels) { this.refreshers.get(panel)?.(); } }
+    private async focus(doc: ProtectedDocument): Promise<void> {
+        await vscode.commands.executeCommand('vscode.openWith', doc.uri, PROTECTED_EDITOR);
+        const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+        if (!(input instanceof vscode.TabInputCustom) || input.uri.toString() !== doc.uri.toString() || input.viewType !== PROTECTED_EDITOR) { throw new Error('Focus the protected editor and retry.'); }
     }
     private readonly refreshers = new Map<vscode.WebviewPanel, () => void>();
     private readonly renderers = new Map<vscode.WebviewPanel, { ready: () => boolean; doc: ProtectedDocument }>();
@@ -155,11 +193,7 @@ api.postMessage({type:'ready'});
     }
     async saveViaWorkbench(doc: ProtectedDocument): Promise<void> {
         this.check(doc);
-        await vscode.commands.executeCommand('vscode.openWith', doc.uri, PROTECTED_EDITOR);
-        const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
-        if (!(input instanceof vscode.TabInputCustom) || input.uri.toString() !== doc.uri.toString() || input.viewType !== PROTECTED_EDITOR) {
-            throw new Error('Focus the protected editor and save it before locking.');
-        }
+        await this.focus(doc);
         await vscode.commands.executeCommand('workbench.action.files.save');
         if (doc.dirty) { throw new Error('Save failed or more edits arrived. Vault remains open.'); }
     }
@@ -172,9 +206,10 @@ api.postMessage({type:'ready'});
         if (doc.saving) { throw new Error('A save is already in progress.'); }
         doc.saving = true;
         const version = doc.version;
+        const written = doc.text;
         try {
             const revision = await this.provider.writeDocument(doc.uri, doc.text, doc.revision);
-            this.check(doc); doc.revision = revision;
+            this.check(doc); doc.revision = revision; doc.savedText = written;
             if (version !== doc.version || token.isCancellationRequested) { throw new Error('New edits arrived during saving. Save again.'); }
             doc.dirty = false;
             await doc.journal?.clear();
@@ -193,7 +228,7 @@ api.postMessage({type:'ready'});
         const snapshot = await this.provider.readDocument(doc.uri);
         this.check(doc, token);
         if (version !== doc.version) { snapshot.text = ''; throw new Error('New edits arrived during reverting. Retry.'); }
-        doc.text = snapshot.text; doc.revision = snapshot.revision; doc.version++; doc.dirty = false;
+        doc.text = snapshot.text; doc.savedText = snapshot.text; doc.eol = preferredEol(snapshot.text); doc.revision = snapshot.revision; doc.version++; doc.dirty = false;
         await doc.journal?.clear();
         for (const panel of doc.panels) { this.refreshers.get(panel)?.(); }
     }

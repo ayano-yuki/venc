@@ -19,8 +19,8 @@ Rust が認証、保存時の暗号化、未保存の下書きの暗号化を担
 5. UTF-8 テキストを編集し、Ctrl/Cmd+S で保存します。上限はファイルごとに 16 MiB。不正な UTF-8 とバイナリは、内容を変更せず拒否します。
 
 保護モードでは、通常のダブルクリックやテキストを読む拡張から Vault の内容を取得できません。専用ビューか右クリックを使ってください。
-専用エディタは通常の textarea とブラウザの Undo を使います。言語サーバー、ノートブック、構文色分け、Vault 全体の検索、インポート、平文出力は提供しません。
-文書モデルの読み込み・保存では BOM と改行を維持しますが、textarea で編集するとブラウザが CRLF を LF に正規化します。
+専用エディタは検索・置換（Ctrl/Cmd+F・H）、VS Code の Undo/Redo、Tab 入力、LF/CRLF 選択に対応します。履歴の平文は 32 MiB を上限に管理し、閉じる際に参照を解放します。言語サーバー、ノートブック、構文色分け、Vault 全体の検索、インポート、平文出力は提供しません。
+BOM と既存の LF/CRLF を編集後も維持します。改行コードを明示的に変える場合はエディタ上部の選択欄を使います。
 文書または親フォルダの名前変更・削除は、保護エディタを保存して閉じてから行ってください。
 
 最初のフォルダ追加時に拡張ホストが再起動する場合があります。再度 `Open Vault` で認証してください。パスワードと鍵は自動復元しません。
@@ -96,3 +96,5 @@ npm run package
 Linux 静的ビルドは静的ライブラリと `RUSTFLAGS="-C target-feature=+crt-static"` が必要です。ローカル検証は Linux x64 で、他環境と独立したセキュリティ監査は未完了です。
 
 参考: [Tree View とアクティビティバー](https://code.visualstudio.com/api/extension-guides/tree-view)、[VS Code カスタムエディタ](https://code.visualstudio.com/api/extension-guides/custom-editors)、[CustomEditorProvider API](https://code.visualstudio.com/api/references/vscode-api#CustomEditorProvider)。
+
+**venc: Choose Editor Mode** から保護・標準編集を選べます。切り替え前に Vault を保存・ロックし、標準編集では平文アクセスとバックアップの条件を確認します。
