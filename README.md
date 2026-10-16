@@ -14,13 +14,19 @@ Both passwords are needed to recover the vault master key. This is **not two-fac
 
 Install a VSIX using **Extensions: Install from VSIX...**, then run **venc: Create Vault** or **venc: Open Vault**.
 Click the **venc vault icon** in the Activity Bar to open its sidebar, create/open vaults, browse files, and lock or unlock individual vaults. The extension asks for both passwords and adds a named virtual workspace folder to Explorer.
-Create folders and files directly in the venc sidebar (toolbar or folder context menu); new files open in the protected editor. You can also open files from **Protected Files** in the venc sidebar or **venc: Open in Protected Editor**. Save with Ctrl/Cmd+S; close documents before renaming/deleting them or their parent folders. UTF-8 text only, at most 16 MiB; language servers and notebooks require unsafe compatibility access.
+Create folders and files directly in the venc sidebar (toolbar or folder context menu); new files open in the protected editor. You can also open files from **Protected Files** in the venc sidebar or **venc: Open in Protected Editor**. Save with Ctrl/Cmd+S. Sidebar rename/delete offers to save and close affected editors first. UTF-8 text only, at most 16 MiB; language servers and notebooks require unsafe compatibility access.
 
 The status bar shows open and locked vault counts. Commands also include **Open Another Vault**, **Lock Vault**, **Lock All Vaults**, **Change Vault Passwords**, and **Forget Vault Location**.
 A cancelled lock or failed save leaves the vault open. Removing its workspace folder releases the core session.
 
 See the [extension guide](vscode-extension/README.md) for settings, multiple vaults, remote hosts, packaging, and editor limitations.
 Passwords and keys are never stored in extension state. Remembered vault IDs and physical paths can be removed with **Forget Vault Location**.
+
+Choose **venc: Choose Editor Mode** to select protected or standard editing. Mode changes save and lock vaults first; standard editing requires explicit consent to plaintext access and backup risks.
+
+Use **venc: Import Files** or drop extension-host files onto a vault folder to encrypt them directly. Originals remain; existing vault files are never overwritten. Imports are cancellable, with at most 100 files per operation and 16 MiB per file. Cross-host drops without host paths require the file picker.
+
+Idle auto-lock defaults to five minutes per vault (`venc.idleTimeoutMinutes`, 0 disables). The status bar shows the next expiry. Protected buffers are frozen, acknowledged, checkpointed, and closed before keys are released; Recover Encrypted Drafts restores unsaved edits. New activity aborts an in-flight expiry. Dirty compatibility editors pause auto-lock instead of being discarded.
 
 ## Build and test
 
@@ -47,6 +53,8 @@ npm run test:backups
 
 The first exercises actual VS Code compatibility editing and extension activation. The second uses a disposable normal profile to verify encrypted custom-editor backups and scan for document plaintext, with the native editor backup as an unsafe control. Test profiles and data are removed afterwards.
 CI is configured for Rust and provider tests on Linux, macOS, and Windows, and editor tests on Linux. These CI jobs have not been executed remotely as part of this change; local validation was on Linux x64.
+
+Normal-profile editor tests now drive the real renderer through the test-only Chromium debugging connection: IME composition, typing, Undo/Redo, literal replacement, and keyboard save. They then kill the disposable VS Code process group, restart the same profile, and recover a draft through the real picker/input UI without overwriting the saved file. The debugging port is confined to tests and localhost. CI runs this on the minimum editor version and stable; CI configuration is not a claim that remote jobs have passed.
 
 ## Package
 
@@ -132,9 +140,3 @@ Path checks reject symlinks in vault objects but do not fully prevent a hostile 
 Use trusted host storage and independent encrypted backups; see [SECURITY.md](SECURITY.md) for exact guarantees and open work.
 
 API references: [RustCrypto Argon2](https://docs.rs/argon2/0.5.3/argon2/), [RustCrypto XChaCha20-Poly1305](https://docs.rs/chacha20poly1305/0.10.1/chacha20poly1305/).
-
-Choose **venc: Choose Editor Mode** to select protected or standard editing. Mode changes save and lock vaults first; standard editing requires explicit consent to plaintext access and backup risks.
-
-Use **venc: Import Files** or drop extension-host files onto a vault folder to encrypt them directly. Originals remain; existing vault files are never overwritten. Imports are cancellable, with at most 100 files per operation and 16 MiB per file. Cross-host drops without host paths require the file picker.
-
-Normal-profile editor tests now drive the real renderer through the test-only Chromium debugging connection: IME composition, typing, Undo/Redo, literal replacement, and keyboard save. They then kill the disposable VS Code process group, restart the same profile, and recover a draft through the real picker/input UI without overwriting the saved file. The debugging port is confined to tests and localhost. CI runs this on the minimum editor version and stable; CI configuration is not a claim that remote jobs have passed.

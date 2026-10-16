@@ -9,7 +9,7 @@ export class DraftJournal {
     private disposed = false;
     private failure?: unknown;
     constructor(private readonly provider: VaultProvider, private readonly uri: vscode.Uri,
-        private readonly snapshot: () => { text: string; revision: string; dirty: boolean }) {}
+        private readonly snapshot: () => { text: string; revision: string; dirty: boolean }, private readonly failed: () => void = () => {}) {}
     schedule(): void {
         if (this.disposed) { return; }
         clearTimeout(this.timer);
@@ -28,7 +28,7 @@ export class DraftJournal {
             this.latest = id; this.failure = undefined;
             if (previous) { await this.provider.deleteBackup(this.uri, previous).catch(() => {}); }
         });
-        this.pending = next.catch(error => { this.failure = error; });
+        this.pending = next.catch(error => { this.failure = error; if (!this.disposed) { this.failed(); } });
         await next;
     }
     async clear(): Promise<void> {

@@ -35,6 +35,8 @@ export class ProtectedDocument implements vscode.CustomDocument {
     }
 }
 export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDocument>, vscode.Disposable {
+    private readonly activity = new vscode.EventEmitter<string>();
+    readonly onActivity = this.activity.event;
     private readonly events = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<ProtectedDocument>>();
     readonly onDidChangeCustomDocument = this.events.event;
     readonly documents = new Map<string, ProtectedDocument>();
@@ -71,7 +73,9 @@ export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDoc
             try { doc.savedText = (await this.provider.readDocument(uri)).text; }
             catch (error) { if (!(error instanceof vscode.FileSystemError) || error.code !== 'FileNotFound') { throw error; } doc.savedText = ''; }
         }
-        doc.journal = new DraftJournal(this.provider, uri, () => ({ text: doc.text, revision: doc.revision, dirty: doc.dirty }));
+        doc.journal = new DraftJournal(this.provider, uri, () => ({ text: doc.text, revision: doc.revision, dirty: doc.dirty }), () => {
+            for (const panel of doc.panels) { void panel.webview.postMessage({ type: 'status', message: 'Encrypted checkpoint failed. Save or retry before closing.' }); }
+        });
         this.documents.set(uri.toString(), doc);
         return doc;
     }
@@ -94,7 +98,7 @@ export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDoc
         }
         this.events.fire({ document: doc, label: 'Edit encrypted document',
             undo: () => this.history(doc, edit, true), redo: () => this.history(doc, edit, false) });
-        doc.journal?.schedule();
+        doc.journal?.schedule(); this.activity.fire(doc.uri.authority);
     }
     resolveCustomEditor(doc: ProtectedDocument, panel: vscode.WebviewPanel): void {
         this.check(doc); doc.panels.add(panel);
@@ -115,7 +119,8 @@ export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDoc
             if (!doc.active || !message || typeof message !== 'object') { return; }
             const m = message as Record<string, unknown>;
             try {
-                if (m.type === 'ready') { ready = true; send(); }
+                if (m.type === 'activity') { this.activity.fire(doc.uri.authority); }
+                else if (m.type === 'ready') { ready = true; send(); }
                 else if (m.type === 'edit' && m.epoch === epoch && Number.isSafeInteger(m.sequence) && (m.sequence as number) > sequence && typeof m.text === 'string') {
                     this.update(doc, fromRenderer(doc.text, m.text, doc.eol)); sequence = m.sequence as number;
                 } else if (m.type === 'snapshot' && typeof m.request === 'string' && m.epoch === epoch && typeof m.text === 'string'
@@ -150,7 +155,7 @@ export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDoc
         this.check(doc);
         if (doc.frozen) { throw new Error('Editing is paused while closing.'); }
         doc.text = applyPatch(doc.text, edit, reverse); doc.version++; doc.dirty = doc.text !== doc.savedText;
-        doc.eol = preferredEol(doc.text); doc.journal?.schedule(); this.refresh(doc);
+        doc.eol = preferredEol(doc.text); this.activity.fire(doc.uri.authority); doc.journal?.schedule(); this.refresh(doc);
     }
     private refresh(doc: ProtectedDocument): void { for (const panel of doc.panels) { this.refreshers.get(panel)?.(); } }
     private async focus(doc: ProtectedDocument): Promise<void> {
@@ -243,6 +248,6 @@ export class ProtectedEditor implements vscode.CustomEditorProvider<ProtectedDoc
     dispose(): void {
         for (const doc of [...this.documents.values()]) { doc.dispose(); }
         for (const pending of this.snapshots.values()) { clearTimeout(pending.timer); pending.reject(new Error('Editor closed.')); }
-        this.snapshots.clear(); this.renderers.clear(); this.refreshers.clear(); this.events.dispose();
+        this.snapshots.clear(); this.renderers.clear(); this.refreshers.clear(); this.events.dispose(); this.activity.dispose();
     }
 }

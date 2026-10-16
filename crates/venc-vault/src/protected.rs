@@ -126,7 +126,7 @@ impl Session {
     pub fn read_backup(&self, backup: &str, path: &str) -> Result<DocumentSnapshot> {
         valid_path(path)?;
         let (original, snapshot) = self.decode_backup(backup)?;
-        ensure!(&*original == path, "backup belongs to another document");
+        ensure!(*original == path, "backup belongs to another document");
         Ok(snapshot)
     }
     pub fn list_backups(&self, after: &str) -> Result<BackupPage> {

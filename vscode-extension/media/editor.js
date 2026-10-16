@@ -7,6 +7,10 @@
     const eol = document.getElementById('eol');
     let sequence = 0, epoch = 0, accepted = '', frozen = false, composing = false;
     const pendingSnapshots = [];
+    let lastActivity = -1000;
+    const activity = () => { if (performance.now() - lastActivity >= 1000) { lastActivity = performance.now(); api.postMessage({ type: 'activity' }); } };
+    document.addEventListener('pointerdown', activity, true);
+    document.addEventListener('keydown', activity, true);
     const emit = () => {
         if (frozen) { text.value = accepted; return; }
         if (new TextEncoder().encode(text.value).length > 16777216) { text.value = accepted; status.textContent = 'Edit rejected: file exceeds 16 MiB.'; return; }

@@ -2,7 +2,7 @@
   "name": "venc",
   "displayName": "venc — Vault ENCrypt",
   "description": "Edit two-password encrypted vaults with a protected editor, encrypted crash drafts, and a virtual filesystem.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "publisher": "ayano-yuki",
   "license": "MIT",
   "engines": {
@@ -144,6 +144,14 @@
           "default": false,
           "scope": "machine",
           "markdownDescription": "Enable compatibility access to decrypted files through the standard FileSystemProvider. **Unsafe for plaintext persistence:** standard editor backups, other extensions, language servers, and Save As can expose contents. Vaults disconnect when this setting changes. Use the protected editor by default."
+        },
+        "venc.idleTimeoutMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 1440,
+          "scope": "machine",
+          "description": "Auto-lock each vault after this many minutes without activity (0 disables). Protected edits are encrypted as recoverable drafts before locking. Unsaved compatibility editors pause automatic locking to avoid discarding data."
         }
       }
     },
@@ -307,7 +315,7 @@
   "scripts": {
     "compile": "tsc -p .",
     "vscode:prepublish": "npm run compile",
-    "test": "npm run compile && node test/provider.test.cjs",
+    "test": "npm run compile && node test/provider.test.cjs && node test/idle.test.cjs",
     "test:integration": "npm run compile && node test/run-vscode.cjs",
     "package": "node scripts/package.cjs",
     "test:backups": "npm run compile && node test/run-backup-probe.cjs"

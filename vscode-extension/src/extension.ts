@@ -6,6 +6,7 @@ import { constants } from 'node:fs';
 import { CoreClient } from './coreClient';
 import { VaultProvider, SCHEME } from './vaultProvider';
 import { ProtectedEditor, PROTECTED_EDITOR } from './protectedEditor';
+import { IdleLock } from './idleLock';
 import { showStorage } from './storageView';
 import { VaultImporter } from './importFiles';
 import { VaultActions, itemUri } from './vaultActions';
@@ -22,6 +23,7 @@ let protectedFiles: ProtectedFiles;
 let vaultRoots: () => VaultRoot[] = () => [];
 let plaintextAccess = false;
 let busy = false;
+let idle: IdleLock | undefined;
 
 function owned(uri: vscode.Uri, authority: string): boolean { return uri.scheme === SCHEME && uri.authority === authority; }
 function tabUris(tab: vscode.Tab): vscode.Uri[] {
@@ -61,11 +63,12 @@ function selectedVault(value: unknown): vscode.Uri {
         || uri.path !== '/' || uri.query || uri.fragment) { throw new Error('Choose a vault in the venc sidebar.'); }
     return uri;
 }
-function updateStatus(): void {
+function updateStatus(refreshTree = true): void {
+    idle?.sync([...mounts.keys()]);
     const locked = vaultRoots().filter(root => root.locked).length;
-    status.text = busy ? '$(sync~spin) venc' : `$(lock) venc: ${mounts.size} open${locked ? ` / ${locked} locked` : ''}`;
+    status.text = busy ? '$(sync~spin) venc' : `$(lock) venc: ${mounts.size} open${locked ? ` / ${locked} locked` : ''}${mounts.size && idle ? ` · ${idle.summary}` : ''}`;
     status.tooltip = busy ? 'Vault operation in progress' : `Editor mode: ${plaintextAccess ? 'Standard (compatibility; plaintext access allowed)' : 'Protected (encrypted drafts)'}. Click to manage vaults.`;
-    protectedFiles?.refresh();
+    if (refreshTree) { protectedFiles?.refresh(); }
     status.command = mounts.size ? 'venc.lockVault' : 'venc.openVault';
     status.show();
     void vscode.commands.executeCommand('setContext', 'venc.hasUnlockedVault', mounts.size > 0);
@@ -219,6 +222,35 @@ async function checkpointDisconnect(authority: string): Promise<void> {
     protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
 }
 
+async function automaticLock(authority: string, stillIdle: () => boolean): Promise<boolean> {
+    const mount = mounts.get(authority); if (!mount) { return true; }
+    if (busy) { idle?.touch(authority); return false; }
+    busy = true; updateStatus(false);
+    try {
+        const compatibilityDirty = dirtyFor(authority).length || tabsFor(authority).some(tab => tab.isDirty
+            && !(tab.input instanceof vscode.TabInputCustom && tab.input.viewType === PROTECTED_EDITOR));
+        if (compatibilityDirty) {
+            void vscode.window.showWarningMessage('Auto-lock paused: save or close unsaved compatibility editors. Their contents were not discarded.');
+            return false;
+        }
+        await protectedEditor.checkpointAll(authority);
+        if (!stillIdle() || mounts.get(authority) !== mount) { return false; }
+        const nativeTabs = tabsFor(authority).filter(tab => !(tab.input instanceof vscode.TabInputCustom && tab.input.viewType === PROTECTED_EDITOR));
+        if (nativeTabs.some(tab => tab.isDirty) || (nativeTabs.length && !await vscode.window.tabGroups.close(nativeTabs, true))) { return false; }
+        if (dirtyFor(authority).length || !stillIdle() || mounts.get(authority) !== mount) { return false; }
+        const drafts = protectedEditor.dirty(authority);
+        protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); updateStatus();
+        try { await mount.client.request('lock', {}); } finally { mount.client.dispose(); }
+        if (drafts) { void vscode.window.showInformationMessage('Vault auto-locked. Unsaved changes were checkpointed; unlock and use Recover Encrypted Drafts to restore them.'); }
+        return true;
+    } catch (error) {
+        void vscode.window.showErrorMessage(error instanceof Error ? `Auto-lock paused: ${error.message}` : 'Auto-lock paused; retry manually.');
+        return false;
+    } finally {
+        if (mounts.get(authority) === mount) { protectedEditor.resumeAll(authority); }
+        busy = false; updateStatus(false);
+    }
+}
 function under(uri: vscode.Uri, root: vscode.Uri): boolean {
     return uri.scheme === root.scheme && uri.authority === root.authority && (uri.path === root.path || uri.path.startsWith(root.path.replace(/\/$/, '') + '/'));
 }
@@ -255,6 +287,8 @@ async function changePasswords(context: vscode.ExtensionContext): Promise<void> 
 }
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     busy = false;
+    idle?.dispose(); idle = new IdleLock(automaticLock);
+    idle.configure(vscode.workspace.getConfiguration('venc').get<number>('idleTimeoutMinutes', 5));
     plaintextAccess = vscode.workspace.getConfiguration('venc').get<boolean>('allowPlaintextAccess', false) === true;
     provider = new VaultProvider(SCHEME, () => plaintextAccess);
     protectedEditor = new ProtectedEditor(provider);
@@ -265,20 +299,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerCustomEditorProvider(PROTECTED_EDITOR, protectedEditor, { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } }),
         vscode.commands.registerCommand('venc.openVaultFile', async (uri?: vscode.Uri) => {
             try {
+                if (uri?.scheme === SCHEME) { idle?.touch(uri.authority); }
                 if (!uri || uri.scheme !== SCHEME) { throw new Error('Choose a vault file.'); }
                 await vscode.commands.executeCommand(plaintextAccess ? 'vscode.open' : 'vscode.openWith', uri, ...(plaintextAccess ? [] : [PROTECTED_EDITOR]));
             } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Cannot open vault file.'); }
         }),
         vscode.commands.registerCommand('venc.openProtectedFile', async (uri?: vscode.Uri) => {
             try {
+                if (uri?.scheme === SCHEME) { idle?.touch(uri.authority); }
                 if (!uri || uri.scheme !== SCHEME) { throw new Error('Choose a file in the Protected Files view or the vault Explorer context menu.'); }
                 await vscode.commands.executeCommand('vscode.openWith', uri, PROTECTED_EDITOR);
             } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Cannot open protected file.'); }
         }));
     status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
     status.name = 'venc Vaults';
+    context.subscriptions.push(idle, idle.onDidChange(() => updateStatus(false)),
+        protectedEditor.onActivity(authority => idle?.touch(authority)),
+        vscode.workspace.onDidChangeTextDocument(event => { if (event.document.uri.scheme === SCHEME) { idle?.touch(event.document.uri.authority); } }),
+        vscode.window.onDidChangeTextEditorSelection(event => { if (event.textEditor.document.uri.scheme === SCHEME) { idle?.touch(event.textEditor.document.uri.authority); } }),
+        vscode.window.onDidChangeWindowState(state => { if (state.focused) { idle?.touch(); } }));
     context.subscriptions.push(status, provider, vscode.workspace.registerFileSystemProvider(SCHEME, provider, { isCaseSensitive: true, isReadonly: false }));
     const command = (name: string, action: (value?: unknown) => Promise<unknown>) => context.subscriptions.push(vscode.commands.registerCommand(name, async (value?: unknown) => {
+        const target = value instanceof vscode.Uri ? value : value && typeof value === 'object' && 'uri' in value ? value.uri : undefined;
+        idle?.touch(target instanceof vscode.Uri ? target.authority : undefined);
         if (busy) { void vscode.window.showInformationMessage('Finish or cancel the current vault operation before starting another.'); return; }
         busy = true; updateStatus();
         try { await action(value); } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Vault operation failed.'); }
@@ -288,7 +331,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const authority = await chooseAuthority(context, true); return authority ? mounts.get(authority)?.root : undefined;
     }, async uri => { await vscode.commands.executeCommand(plaintextAccess ? 'vscode.open' : 'vscode.openWith', uri, ...(plaintextAccess ? [] : [PROTECTED_EDITOR])); }, closeForMutation);
     const importer = new VaultImporter(provider, actions);
-    context.subscriptions.push(vscode.window.createTreeView('venc.protectedFiles', { treeDataProvider: protectedFiles, dragAndDropController: importer }));
+    const tree = vscode.window.createTreeView('venc.protectedFiles', { treeDataProvider: protectedFiles, dragAndDropController: importer });
+    context.subscriptions.push(tree,
+        tree.onDidExpandElement(event => idle?.touch(event.element.uri.authority)),
+        tree.onDidChangeSelection(event => { for (const node of event.selection) { idle?.touch(node.uri.authority); } }));
     command('venc.importFiles', value => importer.select(value));
     command('venc.selectEditorMode', async () => {
         const mode = await vscode.window.showQuickPick([
@@ -349,6 +395,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showInformationMessage('Remembered vault location removed. The encrypted vault is unchanged.');
     });
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async event => {
+        if (event.affectsConfiguration('venc.idleTimeoutMinutes')) { idle?.configure(vscode.workspace.getConfiguration('venc').get<number>('idleTimeoutMinutes', 5)); }
         if (event.affectsConfiguration('venc.allowPlaintextAccess')) {
             for (const authority of mounts.keys()) {
                 await checkpointDisconnect(authority);
@@ -387,6 +434,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 }
 export function deactivate(): void {
+    idle?.dispose(); idle = undefined;
     const clients = [...mounts.values()].map(mount => mount.client);
     mounts.clear();
     protectedEditor?.dispose();

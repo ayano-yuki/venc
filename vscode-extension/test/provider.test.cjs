@@ -114,6 +114,7 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     let treeProvider;
     const executed = [];
     let compatibility = true;
+    let idleMinutes = 5;
     let closeAllowed = true;
     let saveAllowed = false;
     let choice = 'Save and Lock';
@@ -136,20 +137,25 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
                 if (section === 'files' && key === 'hotExit') return 'off';
                 if (section === 'workbench.localHistory' && key === 'enabled') return historyEnabled;
                 if (section === 'venc' && key === 'allowPlaintextAccess') return compatibility;
+                if (section === 'venc' && key === 'idleTimeoutMinutes') return idleMinutes;
                 if (section === 'venc' && key === 'corePath') return configuredBinary;
                 return fallback;
             } }; },
             registerFileSystemProvider(_scheme, value) { registered = value; return new Disposable(() => {}); },
             updateWorkspaceFolders(_start, _deleteCount, folder) { folders.push({ ...folder, index: folders.length }); return true; },
             onDidChangeConfiguration(callback) { configurationChanged = callback; return new Disposable(() => {}); },
+            onDidChangeTextDocument: () => new Disposable(() => {}),
             onDidChangeWorkspaceFolders(callback) { folderChanged = callback; return new Disposable(() => {}); }
         },
         window: {
             showInputBox: async () => inputs.shift(),
             showOpenDialog: async () => [{ fsPath: temp, scheme: 'file' }],
             createStatusBarItem: () => status,
+            onDidChangeTextEditorSelection: () => new Disposable(() => {}),
+            onDidChangeWindowState: () => new Disposable(() => {}),
             registerCustomEditorProvider: (_name, value) => { registeredProtected = value; return new Disposable(() => {}); },
-            createTreeView: (_id, options) => { treeProvider = options.treeDataProvider; return new Disposable(() => {}); },
+            createTreeView: (_id, options) => { treeProvider = options.treeDataProvider; return Object.assign(new Disposable(() => {}), {
+                onDidExpandElement: () => new Disposable(() => {}), onDidChangeSelection: () => new Disposable(() => {}) }); },
             showInformationMessage: async message => { notices.push(message); },
             showWarningMessage: async message => message.startsWith('The standard') ? 'Continue' : choice,
             showErrorMessage: async message => { errors.push(message); },
@@ -294,6 +300,27 @@ test('extension commands: create, cancelled lock, failed save, cancelled close, 
     inputs.push('keep-secret-a', 'keep-secret-b');
     await handlers.get('venc.unlockVault')(protectedUri);
     assert.deepEqual(inputs, ['keep-secret-a', 'keep-secret-b'], 'Non-root sidebar targets are rejected before prompting');
+    inputs.length = 0; inputs.push('a', 'b');
+    await handlers.get('venc.openVault')();
+    const idleDoc = await registeredProtected.openCustomDocument(protectedUri, {}, { isCancellationRequested: false });
+    registeredProtected.update(idleDoc, 'idle unsaved encrypted draft');
+    idleMinutes = 0.02;
+    await configurationChanged({ affectsConfiguration: key => key === 'venc.idleTimeoutMinutes' });
+    const deadline = Date.now() + 6000;
+    while (idleDoc.active && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(idleDoc.active, false, 'Idle expiry closed the protected editor');
+    assert.equal(idleDoc.text, '');
+    await assert.rejects(registered.stat(protectedUri), { code: 'Unavailable' });
+    idleMinutes = 5;
+    await configurationChanged({ affectsConfiguration: key => key === 'venc.idleTimeoutMinutes' });
+    inputs.push('a', 'b'); await handlers.get('venc.openVault')();
+    const drafts = await registered.listBackups(protectedRoot);
+    let recoveredIdle = false;
+    for (const draft of drafts.entries) {
+        if ((await registered.readDocument(protectedUri, draft.id)).text === 'idle unsaved encrypted draft') recoveredIdle = true;
+    }
+    assert(recoveredIdle, 'Auto-lock retained encrypted unsaved content after reauthentication');
+
 
 
 
