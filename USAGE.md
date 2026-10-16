@@ -9,7 +9,7 @@ Vault（ボールト）は、文書を暗号化して保存するフォルダで
 
 ```text
 金庫アイコン → Vault を作成・解除
-Explorer     → Vault の中にフォルダ・空ファイルを作成
+サイドバー   → 新規フォルダ・ファイルを作成
 金庫アイコン → Protected Files からファイルを開く
 Ctrl+S       → 暗号化して保存
 Vault の鍵   → 保存してロック
@@ -78,11 +78,11 @@ Vault が一つもない初期画面には、**Create Vault** と **Open Vault**
 
 以下の例では `my-vault` の中に `notes/memo.txt` を作ります。
 
-1. 通常の **Explorer** を開きます。
-2. **venc: my-vault** を右クリックし、**New Folder**（新しいフォルダー）で `notes` を作ります。
-3. その `notes` を右クリックし、**New File**（新しいファイル）で `memo.txt` を作ります。
-4. 金庫アイコンへ戻り、**Protected Files** の `my-vault` と `notes` を展開します。
-5. `memo.txt` をクリックして保護エディタで開きます。
+1. 金庫アイコンで **Protected Files** を開きます。
+2. **my-vault** を右クリックし、**venc: New Encrypted Folder** で `notes` を作ります。
+3. その `notes` を右クリックし、**venc: New Encrypted File** で `memo.txt` を作ります。
+4. 作成したファイルが保護エディタで直接開きます。
+5. 既存の文書も一覧のファイル名をクリックして開けます。
 
 ```text
 Explorer / Protected Files
@@ -143,7 +143,7 @@ Explorer でファイルを右クリックして **venc: Open in Protected Edito
 
 ## 8. 名前変更・削除・パスワード変更
 
-**文書やフォルダの名前変更・削除:** 対象とその配下の文書を保存して閉じ、通常の Explorer で操作します。保護エディタで開いたままの対象の変更は拒否されます。
+**文書やフォルダの名前変更・削除:** サイドバーで対象を右クリックし、Rename Vault Entry / Delete Vault Entry を選びます。対象や配下の未保存文書があれば Save and Close を確認し、保存・閉じる操作の後に変更します。削除・既存ファイルの上書きには確認・拒否が働きます。
 
 **パスワード変更:** Vault を解除し、コマンドパレットの `venc: Change Vault Passwords` を実行します。
 現在の A と B、新しい A と B、確認用の新しい A と B を順番に入力します。複数の Vault があれば対象を選びます。

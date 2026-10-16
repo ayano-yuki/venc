@@ -33,7 +33,7 @@ Click a locked vault to enter both passwords; expand an unlocked vault to browse
 Locked vaults do not expose their file tree or request decrypted directory metadata.
 
 The toolbar provides Create Vault, Open Another Vault, Lock All Vaults, and Refresh. Each unlocked vault has its own lock action, and each locked vault has an unlock action.
-File/folder creation and rename/delete remain available in the regular workspace Explorer. The status bar counts the same open/locked vaults as the sidebar.
+File/folder creation and rename/delete are available directly in the venc sidebar. Affected editors are saved and closed with consent before path changes. The regular workspace Explorer remains available. The status bar counts the same open/locked vaults as the sidebar.
 
 ## Commands and locking
 

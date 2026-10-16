@@ -83,6 +83,26 @@
         "title": "venc: Recover Encrypted Drafts",
         "icon": "$(history)",
         "enablement": "venc.hasUnlockedVault"
+      },
+      {
+        "command": "venc.newFile",
+        "title": "venc: New Encrypted File",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "venc.newFolder",
+        "title": "venc: New Encrypted Folder",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "venc.renameEntry",
+        "title": "venc: Rename Vault Entry",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "venc.deleteEntry",
+        "title": "venc: Delete Vault Entry",
+        "icon": "$(trash)"
       }
     ],
     "configuration": {
@@ -156,6 +176,16 @@
           "command": "venc.recoverDrafts",
           "when": "view == venc.protectedFiles && venc.hasUnlockedVault",
           "group": "navigation@5"
+        },
+        {
+          "command": "venc.newFile",
+          "when": "view == venc.protectedFiles && venc.hasUnlockedVault",
+          "group": "navigation@6"
+        },
+        {
+          "command": "venc.newFolder",
+          "when": "view == venc.protectedFiles && venc.hasUnlockedVault",
+          "group": "navigation@7"
         }
       ],
       "view/item/context": [
@@ -168,6 +198,26 @@
           "command": "venc.lockSelectedVault",
           "when": "view == venc.protectedFiles && viewItem == vencUnlockedVault",
           "group": "inline"
+        },
+        {
+          "command": "venc.newFile",
+          "when": "view == venc.protectedFiles && (viewItem == vencDirectory || viewItem == vencUnlockedVault)",
+          "group": "create"
+        },
+        {
+          "command": "venc.newFolder",
+          "when": "view == venc.protectedFiles && (viewItem == vencDirectory || viewItem == vencUnlockedVault)",
+          "group": "create"
+        },
+        {
+          "command": "venc.renameEntry",
+          "when": "view == venc.protectedFiles && (viewItem == vencDirectory || viewItem == vencFile)",
+          "group": "modify"
+        },
+        {
+          "command": "venc.deleteEntry",
+          "when": "view == venc.protectedFiles && (viewItem == vencDirectory || viewItem == vencFile)",
+          "group": "modify"
         }
       ],
       "commandPalette": [
@@ -177,6 +227,14 @@
         },
         {
           "command": "venc.lockSelectedVault",
+          "when": "false"
+        },
+        {
+          "command": "venc.renameEntry",
+          "when": "false"
+        },
+        {
+          "command": "venc.deleteEntry",
           "when": "false"
         }
       ]

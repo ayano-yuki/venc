@@ -6,6 +6,7 @@ import { constants } from 'node:fs';
 import { CoreClient } from './coreClient';
 import { VaultProvider, SCHEME } from './vaultProvider';
 import { ProtectedEditor, PROTECTED_EDITOR } from './protectedEditor';
+import { VaultActions } from './vaultActions';
 import { recoverDrafts } from './recovery';
 import { ProtectedFiles, VaultRoot } from './protectedFiles';
 
@@ -216,6 +217,27 @@ async function checkpointDisconnect(authority: string): Promise<void> {
     protectedEditor.revoke(authority); provider.unmount(authority); mounts.delete(authority); mount.client.dispose();
 }
 
+function under(uri: vscode.Uri, root: vscode.Uri): boolean {
+    return uri.scheme === root.scheme && uri.authority === root.authority && (uri.path === root.path || uri.path.startsWith(root.path.replace(/\/$/, '') + '/'));
+}
+async function closeForMutation(uri: vscode.Uri): Promise<void> {
+    const authority = uri.authority;
+    await protectedEditor.freezeAll(authority);
+    try {
+        const docs = [...protectedEditor.documents.values()].filter(doc => under(doc.uri, uri));
+        const native = dirtyFor(authority).filter(doc => under(doc.uri, uri));
+        if (docs.some(doc => doc.dirty) || native.length) {
+            const choice = await vscode.window.showWarningMessage('Save and close affected editors before changing this path?', { modal: true }, 'Save and Close');
+            if (choice !== 'Save and Close') { throw new Error('Operation cancelled; vault files were unchanged.'); }
+            for (const doc of docs) { if (doc.dirty) { await protectedEditor.saveViaWorkbench(doc); } }
+            for (const doc of native) { if (!await doc.save()) { throw new Error('Save failed; path unchanged.'); } }
+        }
+        const tabs = tabsFor(authority).filter(tab => tabUris(tab).some(target => under(target, uri)));
+        if (tabs.some(tab => tab.isDirty) || (tabs.length && !await vscode.window.tabGroups.close(tabs, true))) { throw new Error('Close cancelled; path unchanged.'); }
+        if (tabsFor(authority).some(tab => tabUris(tab).some(target => under(target, uri)))) { throw new Error('An affected editor remains open; path unchanged.'); }
+        for (const doc of docs) { if (doc.dirty) { throw new Error('Unsaved editor remains; path unchanged.'); } doc.dispose(); }
+    } finally { protectedEditor.resumeAll(authority); }
+}
 async function changePasswords(context: vscode.ExtensionContext): Promise<void> {
     const authority = await chooseAuthority(context, true); if (!authority) { return; }
     const mount = mounts.get(authority)!;
@@ -255,6 +277,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         try { await action(value); } catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Vault operation failed.'); }
         finally { busy = false; updateStatus(); }
     }));
+    const actions = new VaultActions(provider, async () => {
+        const authority = await chooseAuthority(context, true); return authority ? mounts.get(authority)?.root : undefined;
+    }, async uri => { await vscode.commands.executeCommand('vscode.openWith', uri, PROTECTED_EDITOR); }, closeForMutation);
+    command('venc.newFile', value => actions.create(value, false));
+    command('venc.newFolder', value => actions.create(value, true));
+    command('venc.renameEntry', value => actions.rename(value));
+    command('venc.deleteEntry', value => actions.delete(value));
     command('venc.recoverDrafts', async () => {
         const authority = await chooseAuthority(context, true); if (!authority) { return; }
         if (!mounts.get(authority)!.capabilities.includes('draftRecovery')) { throw new Error('Update the Rust core to support encrypted draft recovery.'); }

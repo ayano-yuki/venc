@@ -7,6 +7,7 @@ const Module = require('node:module');
 
 class Uri {
     constructor({ scheme, authority, path: uriPath, query = '', fragment = '' }) { Object.assign(this, { scheme, authority, path: uriPath, query, fragment }); }
+    static joinPath(uri, ...parts) { return uri.with({ path: path.posix.join(uri.path, ...parts) }); }
     static from(parts) { return new Uri(parts); }
     static file(location) { return new Uri({ scheme: "file", authority: "", path: location }); }
     with(parts) { return new Uri({ ...this, ...parts }); }
@@ -30,6 +31,7 @@ const load = Module._load;
 Module._load = function (id, ...args) { return id === 'vscode' ? mock : load.call(this, id, ...args); };
 const { VaultProvider } = require('../dist/vaultProvider');
 const { ProtectedEditor } = require('../dist/protectedEditor');
+const { VaultActions } = require('../dist/vaultActions');
 Module._load = load;
 const { CoreClient } = require('../dist/coreClient');
 const binary = process.env.VENC_TEST_CORE || path.resolve(__dirname, '../../target/debug', process.platform === 'win32' ? 'venc.exe' : 'venc');
@@ -466,4 +468,38 @@ test('protected editor: default deny, encrypted drafts, revision conflicts, Save
     for (const name of await fs.readdir(path.join(vault, 'objects'))) {
         assert.equal((await fs.readFile(path.join(vault, 'objects', name))).includes(Buffer.from('secret')), false);
     }
+});
+
+
+test('sidebar actions create and open encrypted files, reject traversal/collisions, and respect delete cancellation', async t => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'venc-actions-'));
+    const client = new CoreClient(binary);
+    const provider = new VaultProvider();
+    const opened = await client.request('init', { vault: path.join(temp, 'vault'), passwordA: 'a', passwordB: 'b' });
+    const root = provider.mount(opened.vaultId, client);
+    const previousWindow = mock.window;
+    const inputs = [];
+    let consent;
+    mock.window = { showInputBox: async () => inputs.shift(), showWarningMessage: async () => consent };
+    const openedFiles = [], closed = [];
+    const actions = new VaultActions(provider, async () => root, async uri => { openedFiles.push(uri); }, async uri => { closed.push(uri); });
+    t.after(async () => { mock.window = previousWindow; provider.dispose(); client.dispose(); await fs.rm(temp, { recursive: true, force: true }); });
+    inputs.push('notes'); await actions.create(root, true);
+    const folder = Uri.joinPath(root, 'notes');
+    inputs.push('memo.txt'); await actions.create({ uri: folder }, false);
+    const file = Uri.joinPath(folder, 'memo.txt');
+    assert.equal(openedFiles[0].toString(), file.toString());
+    let snapshot = await provider.readDocument(file);
+    await provider.writeDocument(file, 'keep me', snapshot.revision);
+    inputs.push('../escape'); await assert.rejects(actions.create(folder, false));
+    inputs.push('memo.txt'); await assert.rejects(actions.create(folder, false));
+    inputs.push('renamed.txt'); await actions.rename({ uri: file });
+    assert.equal(closed[0].toString(), file.toString());
+    const renamed = Uri.joinPath(folder, 'renamed.txt');
+    assert.equal((await provider.readDocument(renamed)).text, 'keep me');
+    await actions.delete({ uri: renamed });
+    assert.equal((await provider.stat(renamed)).size, 7);
+    consent = 'Delete'; await actions.delete({ uri: renamed });
+    await assert.rejects(provider.stat(renamed), { code: 'FileNotFound' });
+    await assert.rejects(actions.delete(root));
 });
